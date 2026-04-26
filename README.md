@@ -1,6 +1,8 @@
 # BeyMeter
 
-Firmware for the Adafruit Feather RP2040, written in C.
+Firmware for the BeyMeter ran on the Adafruit Feather RP2040, written in C.
+
+This is a project that measures the angle and rotational speed of Beyblades as they're launched. Why I am spending my 30s developing a tool like this is beyond me, but it's kind of funny. 
 
 ## First-time setup
 
