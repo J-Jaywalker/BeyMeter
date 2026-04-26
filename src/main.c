@@ -2,6 +2,7 @@
 #include <string.h>
 #include <math.h>
 #include "pico/stdlib.h"
+#include "pico/time.h"
 #include "hardware/i2c.h"
 #include "u8g2.h"
 #include "ism330dhcx_reg.h"
@@ -15,10 +16,28 @@
 #define WIDTH   128
 #define HEIGHT   64
 
+/* ── Button GPIO pins ────────────────────────────────────────────────
+   FeatherWing OLED: A=D9, B=D6, C=D5. Verify against:
+   https://learn.adafruit.com/adafruit-feather-rp2040-pico/pinouts   */
+#define BTN_A  9
+#define BTN_B  8
+#define BTN_C  7
+
+#define DEBOUNCE_MS  150
+
+/* ── IMU / EMA ───────────────────────────────────────────────────── */
 #define ALPHA_TEXT  0.20f
 #define ALPHA_LINE  0.08f
-#define ROLL_PPD    (HEIGHT / 5.0f)   /* px per degree, wraps every 5 deg */
+#define ROLL_PPD    (HEIGHT / 5.0f)
 #define PITCH_PPD   (63.0f / 5.0f)
+
+/* ── Bubble mode ─────────────────────────────────────────────────── */
+#define BUBBLE_MAX_DEG  30.0f   /* angle at which dot reaches edge */
+#define BUBBLE_TRAVEL   22      /* px from centre to edge */
+#define BUBBLE_DOT_R     3      /* filled dot radius */
+#define BUBBLE_TARGET_R  6      /* target zone ring radius */
+
+typedef enum { MODE_BUBBLE, MODE_SPLIT, MODE_NYI } mode_t;
 
 /* ── u8g2 I²C callbacks ──────────────────────────────────────────── */
 
@@ -92,7 +111,103 @@ static void draw_centered(int16_t cx, int16_t cy, const char *s) {
     u8g2_DrawStr(&u8g2, cx - w / 2, baseline, s);
 }
 
-/* ── Main loop ───────────────────────────────────────────────────── */
+/* ── Screen: spirit level bubble ─────────────────────────────────── */
+
+static void draw_bubble(float roll, float pitch) {
+    u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
+
+    /* Outer border */
+    u8g2_DrawFrame(&u8g2, 0, 0, WIDTH, HEIGHT);
+
+    /* Crosshair */
+    u8g2_DrawHLine(&u8g2, 2, HEIGHT / 2, WIDTH - 4);
+    u8g2_DrawVLine(&u8g2, WIDTH / 2, 2, HEIGHT - 4);
+
+    /* Target zone ring */
+    u8g2_DrawCircle(&u8g2, WIDTH / 2, HEIGHT / 2, BUBBLE_TARGET_R, U8G2_DRAW_ALL);
+
+    /* Bubble position: pitch drives X (left/right), roll drives Y (up/down) */
+    float scale = BUBBLE_TRAVEL / BUBBLE_MAX_DEG;
+    int16_t dot_x = WIDTH  / 2 - (int16_t)(pitch * scale);
+    int16_t dot_y = HEIGHT / 2 - (int16_t)(roll  * scale);
+    dot_x = (int16_t)fmaxf(BUBBLE_DOT_R + 2, fminf(WIDTH  - BUBBLE_DOT_R - 3, dot_x));
+    dot_y = (int16_t)fmaxf(BUBBLE_DOT_R + 2, fminf(HEIGHT - BUBBLE_DOT_R - 3, dot_y));
+    u8g2_DrawDisc(&u8g2, dot_x, dot_y, BUBBLE_DOT_R, U8G2_DRAW_ALL);
+
+    /* Angle readouts in corners */
+    char buf[8];
+    int r = (int)roundf(roll), p = (int)roundf(pitch);
+    snprintf(buf, sizeof(buf), "R%c%d", r >= 0 ? '+' : '-', abs(r));
+    u8g2_DrawStr(&u8g2, 3, 8, buf);
+    snprintf(buf, sizeof(buf), "P%c%d", p >= 0 ? '+' : '-', abs(p));
+    u8g2_DrawStr(&u8g2, 3, HEIGHT - 2, buf);
+}
+
+/* ── Screen: split roll / pitch readout (original view) ─────────── */
+
+static void draw_split(float r_line, float p_line, int16_t r, int16_t p) {
+    u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
+
+    int16_t roll_y  = (((int16_t)(32.0f + r_line * ROLL_PPD) % HEIGHT) + HEIGHT) % HEIGHT;
+    int16_t pitch_x = 65 + ((((int16_t)(31.0f - p_line * PITCH_PPD) % 63) + 63) % 63);
+
+    u8g2_DrawVLine(&u8g2, 63, 0, HEIGHT);
+
+    dashed_hline(0, 62, roll_y);
+    dashed_vline(pitch_x, 0, HEIGHT - 1);
+
+    u8g2_SetDrawColor(&u8g2, 0);
+    u8g2_DrawBox(&u8g2,  9, 20, 44, 24);
+    u8g2_DrawBox(&u8g2, 74, 20, 44, 24);
+    u8g2_DrawBox(&u8g2, 20,  0, 23, 13);
+    u8g2_DrawBox(&u8g2, 20, 51, 23, 13);
+    u8g2_DrawBox(&u8g2, 65, 24, 11, 17);
+    u8g2_DrawBox(&u8g2,119, 24,  9, 17);
+    u8g2_SetDrawColor(&u8g2, 1);
+
+    if (r > 0) u8g2_DrawTriangle(&u8g2, 31,  2, 23, 10, 39, 10);
+    if (r < 0) u8g2_DrawTriangle(&u8g2, 31, 62, 23, 54, 39, 54);
+    if (p > 0) u8g2_DrawTriangle(&u8g2, 67, 32, 73, 26, 73, 38);
+    if (p < 0) u8g2_DrawTriangle(&u8g2,127, 32,121, 26,121, 38);
+
+    char r_str[4], p_str[4];
+    snprintf(r_str, sizeof(r_str), "%02d", abs(r));
+    snprintf(p_str, sizeof(p_str), "%02d", abs(p));
+    draw_centered(31, 32, r_str);
+    draw_centered(96, 32, p_str);
+}
+
+/* ── Screen: not yet implemented placeholder ─────────────────────── */
+
+static void draw_nyi(void) {
+    u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
+    draw_centered(WIDTH / 2, 22, "NOT YET");
+    draw_centered(WIDTH / 2, 45, "IMPLEMENTED");
+}
+
+/* ── Button polling ──────────────────────────────────────────────── */
+
+static mode_t poll_buttons(mode_t current) {
+    static bool prev_a = true, prev_b = true, prev_c = true;
+    static uint32_t last_ms = 0;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+
+    bool a = gpio_get(BTN_A);
+    bool b = gpio_get(BTN_B);
+    bool c = gpio_get(BTN_C);
+
+    mode_t next = current;
+    if (now - last_ms >= DEBOUNCE_MS) {
+        if (!a && prev_a) { next = MODE_BUBBLE; last_ms = now; }
+        if (!b && prev_b) { next = MODE_SPLIT;  last_ms = now; }
+        if (!c && prev_c) { next = MODE_NYI;    last_ms = now; }
+    }
+
+    prev_a = a; prev_b = b; prev_c = c;
+    return next;
+}
+
+/* ── Main ────────────────────────────────────────────────────────── */
 
 int main(void) {
     stdio_init_all();
@@ -103,13 +218,20 @@ int main(void) {
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
-    /* Display — 64x128 panel rotated 90° CW → logical 128x64 */
+    /* Buttons — active LOW */
+    const uint btn_pins[] = { BTN_A, BTN_B, BTN_C };
+    for (int i = 0; i < 3; i++) {
+        gpio_init(btn_pins[i]);
+        gpio_set_dir(btn_pins[i], GPIO_IN);
+        gpio_pull_up(btn_pins[i]);
+    }
+
+    /* Display */
     u8g2_Setup_sh1107_i2c_64x128_f(&u8g2, U8G2_R1,
         u8g2_byte_i2c, u8g2_gpio_delay);
     u8g2_SetI2CAddress(&u8g2, DISPLAY_ADDR << 1);
     u8g2_InitDisplay(&u8g2);
     u8g2_SetPowerSave(&u8g2, 0);
-    u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
 
     /* IMU */
     stmdev_ctx_t imu = {
@@ -125,19 +247,18 @@ int main(void) {
     ism330dhcx_xl_data_rate_set(&imu, ISM330DHCX_XL_ODR_104Hz);
     ism330dhcx_xl_full_scale_set(&imu, ISM330DHCX_2g);
 
-    /* EMA state — two speeds: fast for text readout, slow for line animation */
     float r_text = 0.0f, p_text = 0.0f;
     float r_line = 0.0f, p_line = 0.0f;
+    mode_t mode = MODE_BUBBLE;  /* start on spirit level */
 
     for (;;) {
-        /* Read raw accelerometer */
+        /* Sensor */
         int16_t raw[3];
         ism330dhcx_acceleration_raw_get(&imu, raw);
 
-        /* Remap axes for −90° roll mounting (mirrors axis swap in poc.py) */
         float ax =  (float)raw[0];
-        float ay =  (float)raw[2];   /* old az */
-        float az = -(float)raw[1];   /* −old ay */
+        float ay =  (float)raw[2];
+        float az = -(float)raw[1];
 
         float r_raw = fmaxf(-90.0f, fminf(90.0f,
             atan2f(ay, az) * (180.0f / (float)M_PI)));
@@ -152,44 +273,14 @@ int main(void) {
         int16_t r = (int16_t)fmaxf(-90, fminf(90, roundf(r_text)));
         int16_t p = (int16_t)fmaxf(-90, fminf(90, roundf(p_text)));
 
-        /* Line positions — positive modulo matches Python's % behaviour */
-        int16_t roll_y  = (((int16_t)(32.0f + r_line * ROLL_PPD) % HEIGHT) + HEIGHT) % HEIGHT;
-        int16_t pitch_x = 65 + ((((int16_t)(31.0f - p_line * PITCH_PPD) % 63) + 63) % 63);
+        mode = poll_buttons(mode);
 
-        /* ── Build frame ──────────────────────────────────────────── */
         u8g2_ClearBuffer(&u8g2);
-
-        /* Centre divider */
-        u8g2_DrawVLine(&u8g2, 63, 0, HEIGHT);
-
-        /* Dashed indicator lines (full extent across each half) */
-        dashed_hline(0, 62, roll_y);
-        dashed_vline(pitch_x, 0, HEIGHT - 1);
-
-        /* Black masks — erase line pixels behind text and chevron zones */
-        u8g2_SetDrawColor(&u8g2, 0);
-        u8g2_DrawBox(&u8g2,  9, 20, 44, 24);   /* LHS text area   */
-        u8g2_DrawBox(&u8g2, 74, 20, 44, 24);   /* RHS text area   */
-        u8g2_DrawBox(&u8g2, 20,  0, 23, 13);   /* LHS chevron top */
-        u8g2_DrawBox(&u8g2, 20, 51, 23, 13);   /* LHS chevron btm */
-        u8g2_DrawBox(&u8g2, 65, 24, 11, 17);   /* RHS chevron lft */
-        u8g2_DrawBox(&u8g2,119, 24,  9, 17);   /* RHS chevron rgt */
-        u8g2_SetDrawColor(&u8g2, 1);
-
-        /* Chevrons — absolute coords derived from vectorio.Polygon in poc.py */
-        if (r > 0) u8g2_DrawTriangle(&u8g2, 31,  2, 23, 10, 39, 10); /* roll up   */
-        if (r < 0) u8g2_DrawTriangle(&u8g2, 31, 62, 23, 54, 39, 54); /* roll down */
-        if (p > 0) u8g2_DrawTriangle(&u8g2, 67, 32, 73, 26, 73, 38); /* pitch fwd */
-        if (p < 0) u8g2_DrawTriangle(&u8g2,127, 32,121, 26,121, 38); /* pitch bk  */
-
-        /* Value labels */
-        char r_str[4], p_str[4];
-        snprintf(r_str, sizeof(r_str), "%02d", abs(r));
-        snprintf(p_str, sizeof(p_str), "%02d", abs(p));
-        draw_centered(31, 32, r_str);
-        draw_centered(96, 32, p_str);
-
+        switch (mode) {
+        case MODE_BUBBLE: draw_bubble(r_line, p_line); break;
+        case MODE_SPLIT:  draw_split(r_line, p_line, r, p); break;
+        case MODE_NYI:    draw_nyi();                  break;
+        }
         u8g2_SendBuffer(&u8g2);
-        /* No explicit sleep — I²C transfer (~25 ms at 400 kHz) is the rate limiter */
     }
 }
