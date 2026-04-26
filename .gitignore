@@ -1,0 +1,6 @@
+# Build output
+build/
+
+# Copied outputs from make uf2 / make hex
+*.uf2
+*.hex
