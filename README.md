@@ -4,7 +4,7 @@ Firmware for the Adafruit Feather RP2040, written in C.
 
 ## First-time setup
 
-Open WSL and run these three steps:
+Open WSL and run these steps:
 
 **1. Install the toolchain**
 ```bash
@@ -18,10 +18,12 @@ cd ~/pico-sdk && git submodule update --init
 echo 'export PICO_SDK_PATH=~/pico-sdk' >> ~/.bashrc && source ~/.bashrc
 ```
 
-**3. Configure the build**
+**3. Clone the libraries**
 ```bash
 cd ~/BeyMeter
-mkdir build && cd build && cmake ..
+mkdir lib
+git clone https://github.com/olikraus/u8g2 lib/u8g2
+git clone https://github.com/STMicroelectronics/ism330dhcx-pid lib/ism330dhcx-pid
 ```
 
 That's it — you only need to do this once.
@@ -31,16 +33,17 @@ That's it — you only need to do this once.
 From `~/BeyMeter`:
 
 ```bash
-make uf2    # build and output BeyMeter.uf2
-make hex    # build and output BeyMeter.hex
-make clean  # clean up build artifacts
+make uf2    # clean build → BeyMeter.uf2
+make hex    # clean build → BeyMeter.hex
+make build  # incremental build (faster, no clean)
+make clean  # wipe build artifacts
 ```
 
 ## Flashing
 
 1. Hold **BOOTSEL** on the Feather and plug it into USB
 2. It appears as a drive called `RPI-RP2` in Windows Explorer
-3. Drag `BeyMeter.uf2` onto the drive — done, it reboots automatically
+3. Drag `BeyMeter.uf2` onto the drive — it reboots automatically
 
 ## Viewing serial output
 
