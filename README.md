@@ -1,73 +1,57 @@
 # BeyMeter
 
-Firmware for the Adafruit Feather RP2040. Written in C using the Raspberry Pi Pico SDK.
+Firmware for the Adafruit Feather RP2040, written in C.
 
-## Hardware
+## First-time setup
 
-- **Board:** Adafruit Feather RP2040
-- **IMU:** ISM330DHCX (via STEMMA QT / I2C)
-- **Display:** SH1107 (via STEMMA QT / I2C)
+Open WSL and run these three steps:
 
-STEMMA QT uses I2C1 on GPIO2 (SDA) and GPIO3 (SCL).
-
-## Prerequisites
-
-### Toolchain (WSL / Linux)
-
+**1. Install the toolchain**
 ```bash
 sudo apt install cmake gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential
 ```
 
-### Pico SDK
-
+**2. Clone the Pico SDK**
 ```bash
 git clone https://github.com/raspberrypi/pico-sdk ~/pico-sdk
 cd ~/pico-sdk && git submodule update --init
 echo 'export PICO_SDK_PATH=~/pico-sdk' >> ~/.bashrc && source ~/.bashrc
 ```
 
-## Building
-
-Configure once (only needed on first clone or after changing CMakeLists.txt):
-
+**3. Configure the build**
 ```bash
-mkdir build && cd build
-cmake ..
+cd ~/BeyMeter
+mkdir build && cd build && cmake ..
 ```
 
-Then build:
+That's it — you only need to do this once.
+
+## Every day usage
+
+From `~/BeyMeter`:
 
 ```bash
-make build        # compile only
-make uf2          # compile + copy BeyMeter.uf2 to project root
-make hex          # compile + copy BeyMeter.hex to project root
-make clean        # remove build artifacts and copied outputs
+make uf2    # build and output BeyMeter.uf2
+make hex    # build and output BeyMeter.hex
+make clean  # clean up build artifacts
 ```
 
 ## Flashing
 
-1. Hold **BOOTSEL** on the Feather while plugging in USB — it appears as a drive called `RPI-RP2`
-2. Drag `BeyMeter.uf2` onto the drive
-3. The board reboots and runs the new firmware automatically
+1. Hold **BOOTSEL** on the Feather and plug it into USB
+2. It appears as a drive called `RPI-RP2` in Windows Explorer
+3. Drag `BeyMeter.uf2` onto the drive — done, it reboots automatically
 
-## Serial Output
-
-The firmware prints over USB CDC serial (`stdio_init_all()` + `pico_enable_stdio_usb`).
+## Viewing serial output
 
 1. Flash the board and let it reboot
-2. Open a serial monitor on the COM port that appears (e.g. COM4 on Windows)
-3. Any baud rate works — USB CDC is virtual
+2. Open your serial monitor on COM4 (any baud rate)
+3. You should see output printing every second
 
-## Project Structure
+## Hardware
 
-```
-BeyMeter/
-├── CMakeLists.txt
-├── Makefile
-├── pico_sdk_import.cmake
-├── src/
-│   └── main.c
-└── lib/
-    ├── ism330dhcx-pid/       # ST IMU driver (drop ism330dhcx_reg.h/.c here)
-    └── displaylib_1bit_PICO/ # SH1107 display driver
-```
+| Component | Connection |
+|-----------|------------|
+| Adafruit Feather RP2040 | — |
+| ISM330DHCX IMU | STEMMA QT (I2C) |
+| SH1107 Display | STEMMA QT (I2C) |
