@@ -10,9 +10,20 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-add_executable(BeyMeter src/main.c)
+file(GLOB U8G2_SOURCES lib/u8g2/csrc/*.c)
 
-target_link_libraries(BeyMeter pico_stdlib hardware_i2c)
+add_executable(BeyMeter
+    src/main.c
+    ${U8G2_SOURCES}
+    lib/ism330dhcx-pid/ism330dhcx_reg.c
+)
+
+target_include_directories(BeyMeter PRIVATE
+    lib/u8g2/csrc
+    lib/ism330dhcx-pid
+)
+
+target_link_libraries(BeyMeter pico_stdlib hardware_i2c pico_float m)
 
 pico_add_extra_outputs(BeyMeter)
 
