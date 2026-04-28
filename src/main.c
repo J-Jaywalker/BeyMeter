@@ -12,12 +12,13 @@
 #define I2C_SCL      3
 #define IMU_ADDR     0x6A
 #define DISPLAY_ADDR 0x3C
+#define BAT_ADDR     0x36   /* MAX17048 fuel gauge */
 
 #define WIDTH   128
 #define HEIGHT   64
 
 /* ── Button GPIO pins ────────────────────────────────────────────────
-   FeatherWing OLED: A=D9, B=D6, C=D5. Verify against:
+   FeatherWing OLED: A=D9, B=D6, C=D5
    https://learn.adafruit.com/adafruit-feather-rp2040-pico/pinouts   */
 #define BTN_A  9
 #define BTN_B  8
@@ -32,10 +33,10 @@
 #define PITCH_PPD   (63.0f / 5.0f)
 
 /* ── Bubble mode ─────────────────────────────────────────────────── */
-#define BUBBLE_MAX_DEG  30.0f   /* angle at which dot reaches edge */
-#define BUBBLE_TRAVEL   22      /* px from centre to edge */
-#define BUBBLE_DOT_R     3      /* filled dot radius */
-#define BUBBLE_TARGET_R  6      /* target zone ring radius */
+#define BUBBLE_MAX_DEG  75.0f
+#define BUBBLE_TRAVEL_X 60    /* px from centre to outer ring, horizontal */
+#define BUBBLE_TRAVEL_Y 28    /* px from centre to outer ring, vertical   */
+#define BUBBLE_DOT_R     3
 
 typedef enum { MODE_BUBBLE, MODE_SPLIT, MODE_NYI } mode_t;
 
@@ -91,6 +92,28 @@ static int32_t imu_read(void *hdl, uint8_t reg, uint8_t *buf, uint16_t len) {
 
 static void imu_delay_ms(uint32_t ms) { sleep_ms(ms); }
 
+/* ── MAX17048 battery fuel gauge ─────────────────────────────────── */
+
+static uint16_t bat_read_reg(uint8_t reg) {
+    uint8_t buf[2];
+    i2c_write_blocking(I2C_PORT, BAT_ADDR, &reg, 1, true);
+    i2c_read_blocking(I2C_PORT, BAT_ADDR, buf, 2, false);
+    return (uint16_t)(buf[0] << 8) | buf[1];
+}
+
+/* Returns state of charge 0-100 (integer %) */
+static uint8_t bat_percent(void) {
+    uint16_t raw = bat_read_reg(0x04);  /* SOC register */
+    uint8_t pct = raw >> 8;             /* MSB = whole percent */
+    return pct > 100 ? 100 : pct;
+}
+
+/* Returns cell voltage in mV */
+static uint16_t bat_mv(void) {
+    uint16_t raw = bat_read_reg(0x02);  /* VCELL register */
+    return (uint16_t)((raw >> 4) * 125 / 100);  /* 1.25mV per LSB */
+}
+
 /* ── Drawing helpers ─────────────────────────────────────────────── */
 
 static u8g2_t u8g2;
@@ -113,46 +136,51 @@ static void draw_centered(int16_t cx, int16_t cy, const char *s) {
 
 /* ── Screen: spirit level bubble ─────────────────────────────────── */
 
-static void draw_bubble(float roll, float pitch) {
+static void draw_bubble(float roll, float pitch, uint8_t bat) {
     u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
 
-    /* Outer border */
     u8g2_DrawFrame(&u8g2, 0, 0, WIDTH, HEIGHT);
-
-    /* Crosshair */
     u8g2_DrawHLine(&u8g2, 2, HEIGHT / 2, WIDTH - 4);
     u8g2_DrawVLine(&u8g2, WIDTH / 2, 2, HEIGHT - 4);
+    /* Zero-point circle */
+    u8g2_DrawCircle(&u8g2, WIDTH / 2, HEIGHT / 2, 4, U8G2_DRAW_ALL);
+    /* Rounded rectangles at 15° intervals */
+    for (int deg = 15; deg <= (int)BUBBLE_MAX_DEG; deg += 15) {
+        int16_t x_hs = (int16_t)((float)BUBBLE_TRAVEL_X * deg / BUBBLE_MAX_DEG);
+        int16_t y_hs = (int16_t)((float)BUBBLE_TRAVEL_Y * deg / BUBBLE_MAX_DEG);
+        int16_t cr   = y_hs / 3 < 2 ? 2 : y_hs / 3;
+        u8g2_DrawRFrame(&u8g2, WIDTH / 2 - x_hs, HEIGHT / 2 - y_hs, x_hs * 2, y_hs * 2, cr);
+    }
 
-    /* Target zone ring */
-    u8g2_DrawCircle(&u8g2, WIDTH / 2, HEIGHT / 2, BUBBLE_TARGET_R, U8G2_DRAW_ALL);
-
-    /* Bubble position: pitch drives X (left/right), roll drives Y (up/down) */
-    float scale = BUBBLE_TRAVEL / BUBBLE_MAX_DEG;
-    int16_t dot_x = WIDTH  / 2 - (int16_t)(pitch * scale);
-    int16_t dot_y = HEIGHT / 2 - (int16_t)(roll  * scale);
+    float sx = BUBBLE_TRAVEL_X / BUBBLE_MAX_DEG;
+    float sy = BUBBLE_TRAVEL_Y / BUBBLE_MAX_DEG;
+    int16_t dot_x = WIDTH  / 2 - (int16_t)(pitch * sx);
+    int16_t dot_y = HEIGHT / 2 - (int16_t)(roll  * sy);
     dot_x = (int16_t)fmaxf(BUBBLE_DOT_R + 2, fminf(WIDTH  - BUBBLE_DOT_R - 3, dot_x));
     dot_y = (int16_t)fmaxf(BUBBLE_DOT_R + 2, fminf(HEIGHT - BUBBLE_DOT_R - 3, dot_y));
     u8g2_DrawDisc(&u8g2, dot_x, dot_y, BUBBLE_DOT_R, U8G2_DRAW_ALL);
 
-    /* Angle readouts in corners */
     char buf[8];
     int r = (int)roundf(roll), p = (int)roundf(pitch);
     snprintf(buf, sizeof(buf), "R%c%d", r >= 0 ? '+' : '-', abs(r));
     u8g2_DrawStr(&u8g2, 3, 8, buf);
     snprintf(buf, sizeof(buf), "P%c%d", p >= 0 ? '+' : '-', abs(p));
     u8g2_DrawStr(&u8g2, 3, HEIGHT - 2, buf);
+
+    /* Battery % top-right */
+    snprintf(buf, sizeof(buf), "%d%%", bat);
+    u8g2_DrawStr(&u8g2, WIDTH - u8g2_GetStrWidth(&u8g2, buf) - 3, 8, buf);
 }
 
-/* ── Screen: split roll / pitch readout (original view) ─────────── */
+/* ── Screen: split roll / pitch readout ─────────────────────────── */
 
-static void draw_split(float r_line, float p_line, int16_t r, int16_t p) {
+static void draw_split(float r_line, float p_line, int16_t r, int16_t p, uint8_t bat) {
     u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
 
     int16_t roll_y  = (((int16_t)(32.0f + r_line * ROLL_PPD) % HEIGHT) + HEIGHT) % HEIGHT;
     int16_t pitch_x = 65 + ((((int16_t)(31.0f - p_line * PITCH_PPD) % 63) + 63) % 63);
 
     u8g2_DrawVLine(&u8g2, 63, 0, HEIGHT);
-
     dashed_hline(0, 62, roll_y);
     dashed_vline(pitch_x, 0, HEIGHT - 1);
 
@@ -175,9 +203,15 @@ static void draw_split(float r_line, float p_line, int16_t r, int16_t p) {
     snprintf(p_str, sizeof(p_str), "%02d", abs(p));
     draw_centered(31, 32, r_str);
     draw_centered(96, 32, p_str);
+
+    /* Battery % bottom-centre, small font */
+    u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
+    char buf[6];
+    snprintf(buf, sizeof(buf), "%d%%", bat);
+    u8g2_DrawStr(&u8g2, 64 - u8g2_GetStrWidth(&u8g2, buf) / 2, HEIGHT - 1, buf);
 }
 
-/* ── Screen: not yet implemented placeholder ─────────────────────── */
+/* ── Screen: not yet implemented ─────────────────────────────────── */
 
 static void draw_nyi(void) {
     u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
@@ -218,7 +252,6 @@ int main(void) {
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
-    /* Buttons — active LOW */
     const uint btn_pins[] = { BTN_A, BTN_B, BTN_C };
     for (int i = 0; i < 3; i++) {
         gpio_init(btn_pins[i]);
@@ -226,14 +259,12 @@ int main(void) {
         gpio_pull_up(btn_pins[i]);
     }
 
-    /* Display */
     u8g2_Setup_sh1107_i2c_64x128_f(&u8g2, U8G2_R1,
         u8g2_byte_i2c, u8g2_gpio_delay);
     u8g2_SetI2CAddress(&u8g2, DISPLAY_ADDR << 1);
     u8g2_InitDisplay(&u8g2);
     u8g2_SetPowerSave(&u8g2, 0);
 
-    /* IMU */
     stmdev_ctx_t imu = {
         .write_reg = imu_write,
         .read_reg  = imu_read,
@@ -249,10 +280,14 @@ int main(void) {
 
     float r_text = 0.0f, p_text = 0.0f;
     float r_line = 0.0f, p_line = 0.0f;
-    mode_t mode = MODE_BUBBLE;  /* start on spirit level */
+    mode_t mode = MODE_BUBBLE;
+
+    /* Battery is slow-changing — read once per second (~40 frames) */
+    uint8_t bat = bat_percent();
+    uint16_t bat_mv_val = bat_mv();
+    uint32_t bat_tick = 0;
 
     for (;;) {
-        /* Sensor */
         int16_t raw[3];
         ism330dhcx_acceleration_raw_get(&imu, raw);
 
@@ -260,9 +295,9 @@ int main(void) {
         float ay =  (float)raw[2];
         float az = -(float)raw[1];
 
-        float r_raw = fmaxf(-90.0f, fminf(90.0f,
+        float r_raw = fmaxf(-75.0f, fminf(75.0f,
             atan2f(ay, az) * (180.0f / (float)M_PI)));
-        float p_raw = fmaxf(-90.0f, fminf(90.0f,
+        float p_raw = fmaxf(-75.0f, fminf(75.0f,
             atan2f(-ax, sqrtf(ay*ay + az*az)) * (180.0f / (float)M_PI)));
 
         r_text = ALPHA_TEXT * r_raw + (1.0f - ALPHA_TEXT) * r_text;
@@ -270,16 +305,23 @@ int main(void) {
         r_line = ALPHA_LINE * r_raw + (1.0f - ALPHA_LINE) * r_line;
         p_line = ALPHA_LINE * p_raw + (1.0f - ALPHA_LINE) * p_line;
 
-        int16_t r = (int16_t)fmaxf(-90, fminf(90, roundf(r_text)));
-        int16_t p = (int16_t)fmaxf(-90, fminf(90, roundf(p_text)));
+        int16_t r = (int16_t)fmaxf(-75, fminf(75, roundf(r_text)));
+        int16_t p = (int16_t)fmaxf(-75, fminf(75, roundf(p_text)));
+
+        if (++bat_tick >= 40) {
+            bat       = bat_percent();
+            bat_mv_val = bat_mv();
+            bat_tick  = 0;
+            printf("bat: %d%% (%dmV)\n", bat, bat_mv_val);
+        }
 
         mode = poll_buttons(mode);
 
         u8g2_ClearBuffer(&u8g2);
         switch (mode) {
-        case MODE_BUBBLE: draw_bubble(r_line, p_line); break;
-        case MODE_SPLIT:  draw_split(r_line, p_line, r, p); break;
-        case MODE_NYI:    draw_nyi();                  break;
+        case MODE_BUBBLE: draw_bubble(r_line, p_line, bat);        break;
+        case MODE_SPLIT:  draw_split(r_line, p_line, r, p, bat);   break;
+        case MODE_NYI:    draw_nyi();                               break;
         }
         u8g2_SendBuffer(&u8g2);
     }
