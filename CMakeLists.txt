@@ -14,6 +14,8 @@ file(GLOB U8G2_SOURCES lib/u8g2/csrc/*.c)
 
 add_executable(BeyMeter
     src/main.c
+    src/hw.c
+    src/screens.c
     ${U8G2_SOURCES}
     lib/ism330dhcx-pid/ism330dhcx_reg.c
 )
