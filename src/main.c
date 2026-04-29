@@ -12,7 +12,7 @@
 #define I2C_SCL      3
 #define IMU_ADDR     0x6A
 #define DISPLAY_ADDR 0x3C
-#define BAT_ADDR     0x36   /* MAX17048 fuel gauge */
+#define BAT_ADDR     0x36
 
 #define WIDTH   128
 #define HEIGHT   64
@@ -24,8 +24,6 @@
 #define BTN_B  8
 #define BTN_C  7
 
-#define DEBOUNCE_MS  150
-
 /* ── IMU / EMA ───────────────────────────────────────────────────── */
 #define ALPHA_TEXT  0.20f
 #define ALPHA_LINE  0.08f
@@ -33,12 +31,18 @@
 #define PITCH_PPD   (63.0f / 5.0f)
 
 /* ── Bubble mode ─────────────────────────────────────────────────── */
-#define BUBBLE_MAX_DEG  75.0f
-#define BUBBLE_TRAVEL_X 60    /* px from centre to outer ring, horizontal */
-#define BUBBLE_TRAVEL_Y 28    /* px from centre to outer ring, vertical   */
+#define BUBBLE_MAX_DEG  45.0f
+#define BUBBLE_TRAVEL_X 60
+#define BUBBLE_TRAVEL_Y 28
 #define BUBBLE_DOT_R     3
 
-typedef enum { MODE_BUBBLE, MODE_SPLIT, MODE_NYI } mode_t;
+/* ── Menu ────────────────────────────────────────────────────────── */
+#define MENU_HOLD_MS  1000
+#define MENU_ITEM_H   20
+
+/* VIEW_BUBBLE / VIEW_GAUGE are sub-screens of ANGLE_MODE.
+   A opens the menu. B = bubble, C = gauge (when menu closed).    */
+typedef enum { VIEW_BUBBLE, VIEW_GAUGE, VIEW_RPM, VIEW_STATS } view_t;
 
 /* ── u8g2 I²C callbacks ──────────────────────────────────────────── */
 
@@ -92,7 +96,7 @@ static int32_t imu_read(void *hdl, uint8_t reg, uint8_t *buf, uint16_t len) {
 
 static void imu_delay_ms(uint32_t ms) { sleep_ms(ms); }
 
-/* ── MAX17048 battery fuel gauge ─────────────────────────────────── */
+/* ── MAX17048 battery ────────────────────────────────────────────── */
 
 static uint16_t bat_read_reg(uint8_t reg) {
     uint8_t buf[2];
@@ -101,17 +105,13 @@ static uint16_t bat_read_reg(uint8_t reg) {
     return (uint16_t)(buf[0] << 8) | buf[1];
 }
 
-/* Returns state of charge 0-100 (integer %) */
 static uint8_t bat_percent(void) {
-    uint16_t raw = bat_read_reg(0x04);  /* SOC register */
-    uint8_t pct = raw >> 8;             /* MSB = whole percent */
+    uint8_t pct = bat_read_reg(0x04) >> 8;
     return pct > 100 ? 100 : pct;
 }
 
-/* Returns cell voltage in mV */
 static uint16_t bat_mv(void) {
-    uint16_t raw = bat_read_reg(0x02);  /* VCELL register */
-    return (uint16_t)((raw >> 4) * 125 / 100);  /* 1.25mV per LSB */
+    return (uint16_t)((bat_read_reg(0x02) >> 4) * 125 / 100);
 }
 
 /* ── Drawing helpers ─────────────────────────────────────────────── */
@@ -134,6 +134,28 @@ static void draw_centered(int16_t cx, int16_t cy, const char *s) {
     u8g2_DrawStr(&u8g2, cx - w / 2, baseline, s);
 }
 
+/* ── Battery icon ────────────────────────────────────────────────── */
+/*
+ * 30×12 body + 3×6 terminal nib in the top-right corner.
+ * Text is drawn first in white, then an XOR fill box sweeps left-to-right
+ * across the filled portion — the overlap inverts to black-on-white.
+ */
+static void draw_battery(uint8_t pct) {
+    const int16_t bx = WIDTH - 14;  /* left edge of 12px body */
+    const int16_t by = 1;
+
+    u8g2_SetDrawColor(&u8g2, 0);
+    u8g2_DrawBox(&u8g2, bx - 1, 0, WIDTH - bx + 1, 8);
+
+    u8g2_SetDrawColor(&u8g2, 1);
+    u8g2_DrawFrame(&u8g2, bx, by, 12, 6);
+    u8g2_DrawBox(&u8g2, bx + 12, by + 2, 1, 2);
+
+    int16_t fill_w = (int16_t)(10 * pct / 100);
+    if (fill_w > 0)
+        u8g2_DrawBox(&u8g2, bx + 1, by + 1, fill_w, 4);
+}
+
 /* ── Screen: spirit level bubble ─────────────────────────────────── */
 
 static void draw_bubble(float roll, float pitch, uint8_t bat) {
@@ -142,9 +164,8 @@ static void draw_bubble(float roll, float pitch, uint8_t bat) {
     u8g2_DrawFrame(&u8g2, 0, 0, WIDTH, HEIGHT);
     u8g2_DrawHLine(&u8g2, 2, HEIGHT / 2, WIDTH - 4);
     u8g2_DrawVLine(&u8g2, WIDTH / 2, 2, HEIGHT - 4);
-    /* Zero-point circle */
     u8g2_DrawCircle(&u8g2, WIDTH / 2, HEIGHT / 2, 4, U8G2_DRAW_ALL);
-    /* Rounded rectangles at 15° intervals */
+
     for (int deg = 15; deg <= (int)BUBBLE_MAX_DEG; deg += 15) {
         int16_t x_hs = (int16_t)((float)BUBBLE_TRAVEL_X * deg / BUBBLE_MAX_DEG);
         int16_t y_hs = (int16_t)((float)BUBBLE_TRAVEL_Y * deg / BUBBLE_MAX_DEG);
@@ -166,15 +187,12 @@ static void draw_bubble(float roll, float pitch, uint8_t bat) {
     u8g2_DrawStr(&u8g2, 3, 8, buf);
     snprintf(buf, sizeof(buf), "P%c%d", p >= 0 ? '+' : '-', abs(p));
     u8g2_DrawStr(&u8g2, 3, HEIGHT - 2, buf);
-
-    /* Battery % top-right */
-    snprintf(buf, sizeof(buf), "%d%%", bat);
-    u8g2_DrawStr(&u8g2, WIDTH - u8g2_GetStrWidth(&u8g2, buf) - 3, 8, buf);
+    draw_battery(bat);
 }
 
-/* ── Screen: split roll / pitch readout ─────────────────────────── */
+/* ── Screen: split roll / pitch gauge ───────────────────────────── */
 
-static void draw_split(float r_line, float p_line, int16_t r, int16_t p, uint8_t bat) {
+static void draw_gauge(float r_line, float p_line, int16_t r, int16_t p, uint8_t bat) {
     u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
 
     int16_t roll_y  = (((int16_t)(32.0f + r_line * ROLL_PPD) % HEIGHT) + HEIGHT) % HEIGHT;
@@ -204,41 +222,98 @@ static void draw_split(float r_line, float p_line, int16_t r, int16_t p, uint8_t
     draw_centered(31, 32, r_str);
     draw_centered(96, 32, p_str);
 
-    /* Battery % bottom-centre, small font */
-    u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
-    char buf[6];
-    snprintf(buf, sizeof(buf), "%d%%", bat);
-    u8g2_DrawStr(&u8g2, 64 - u8g2_GetStrWidth(&u8g2, buf) / 2, HEIGHT - 1, buf);
+    draw_battery(bat);
 }
 
-/* ── Screen: not yet implemented ─────────────────────────────────── */
+/* ── Screen: RPM mode placeholder ───────────────────────────────── */
 
-static void draw_nyi(void) {
+static void draw_rpm(void) {
     u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
-    draw_centered(WIDTH / 2, 22, "NOT YET");
-    draw_centered(WIDTH / 2, 45, "IMPLEMENTED");
+    draw_centered(WIDTH / 2, 22, "RPM MODE");
+    draw_centered(WIDTH / 2, 45, "TBD");
 }
 
-/* ── Button polling ──────────────────────────────────────────────── */
+/* ── Screen: stats ───────────────────────────────────────────────── */
 
-static mode_t poll_buttons(mode_t current) {
-    static bool prev_a = true, prev_b = true, prev_c = true;
-    static uint32_t last_ms = 0;
-    uint32_t now = to_ms_since_boot(get_absolute_time());
+static void draw_beetle(void) {
+    const int16_t ox = 110, oy = 1;
 
-    bool a = gpio_get(BTN_A);
-    bool b = gpio_get(BTN_B);
-    bool c = gpio_get(BTN_C);
+    /* Mandibles — forked pincers */
+    u8g2_DrawLine(&u8g2, ox+5, oy+5, ox+2, oy+1);
+    u8g2_DrawLine(&u8g2, ox+5, oy+5, ox+4, oy+2);
+    u8g2_DrawLine(&u8g2, ox+9, oy+5, ox+12, oy+1);
+    u8g2_DrawLine(&u8g2, ox+9, oy+5, ox+10, oy+2);
 
-    mode_t next = current;
-    if (now - last_ms >= DEBOUNCE_MS) {
-        if (!a && prev_a) { next = MODE_BUBBLE; last_ms = now; }
-        if (!b && prev_b) { next = MODE_SPLIT;  last_ms = now; }
-        if (!c && prev_c) { next = MODE_NYI;    last_ms = now; }
+    /* Head */
+    u8g2_DrawDisc(&u8g2, ox+7, oy+7, 2, U8G2_DRAW_ALL);
+
+    /* Thorax */
+    u8g2_DrawBox(&u8g2, ox+5, oy+10, 5, 3);
+
+    /* Elytra (wing covers) with centre seam */
+    u8g2_DrawRBox(&u8g2, ox+4, oy+13, 7, 8, 2);
+    u8g2_DrawVLine(&u8g2, ox+7, oy+14, 6);
+
+    /* Legs — 3 per side */
+    u8g2_DrawLine(&u8g2, ox+5, oy+11, ox+2, oy+9);
+    u8g2_DrawLine(&u8g2, ox+5, oy+13, ox+2, oy+12);
+    u8g2_DrawLine(&u8g2, ox+5, oy+17, ox+2, oy+19);
+    u8g2_DrawLine(&u8g2, ox+9, oy+11, ox+12, oy+9);
+    u8g2_DrawLine(&u8g2, ox+9, oy+13, ox+12, oy+12);
+    u8g2_DrawLine(&u8g2, ox+9, oy+17, ox+12, oy+19);
+}
+
+static void draw_stats(void) {
+    u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
+    u8g2_DrawStr(&u8g2, 2,  8,  "BEYBEETLE V0.1");
+    u8g2_DrawHLine(&u8g2, 0, 11, WIDTH);
+    u8g2_DrawStr(&u8g2, 2, 22,  "BLADER: CHAMBER");
+    u8g2_DrawStr(&u8g2, 2, 32,  "TOP SHOOT: N/A");
+    u8g2_DrawStr(&u8g2, 2, 42,  "LAUNCHES: N/A");
+    draw_beetle();
+}
+
+/* ── Menu overlay ────────────────────────────────────────────────── */
+/*
+ * Items: 0 = ANGLE_MODE_  (hold A)
+ *        1 = RPM_MODE_    (hold B)
+ *        2 = BACK_        (press C, immediate)
+ *
+ * Fill animation uses XOR draw mode so the text inverts as the bar
+ * sweeps over it — no clipping needed.
+ *
+ * Progress curve: sqrtf(t) — fast at the start, eases in at the end.
+ */
+static void draw_menu(int8_t held_item, float progress) {
+    const char *labels[3] = { "ANGLE_MODE_", "RPM_MODE_", "STATS_" };
+
+    u8g2_SetDrawColor(&u8g2, 0);
+    u8g2_DrawBox(&u8g2, 0, 0, WIDTH, HEIGHT);
+    u8g2_SetDrawColor(&u8g2, 1);
+    u8g2_DrawFrame(&u8g2, 0, 0, WIDTH, HEIGHT);
+
+    u8g2_SetFont(&u8g2, u8g2_font_profont12_tf);
+    int16_t ascent  = u8g2_GetAscent(&u8g2);
+    int16_t descent = u8g2_GetDescent(&u8g2);
+
+    for (int i = 0; i < 3; i++) {
+        int16_t iy       = 2 + i * MENU_ITEM_H;
+        int16_t ih       = MENU_ITEM_H - 1;
+        int16_t baseline = iy + ih / 2 + (ascent + descent) / 2;
+
+        /* White text */
+        u8g2_SetDrawColor(&u8g2, 1);
+        u8g2_DrawStr(&u8g2, 5, baseline, labels[i]);
+
+        /* XOR fill sweeps over the item, inverting text colour */
+        float item_prog = (i == held_item) ? progress : 0.0f;
+        if (item_prog > 0.0f) {
+            int16_t fw = (int16_t)((WIDTH - 2) * item_prog);
+            u8g2_SetDrawColor(&u8g2, 2);   /* XOR */
+            u8g2_DrawBox(&u8g2, 1, iy, fw, ih);
+            u8g2_SetDrawColor(&u8g2, 1);
+        }
     }
-
-    prev_a = a; prev_b = b; prev_c = c;
-    return next;
 }
 
 /* ── Main ────────────────────────────────────────────────────────── */
@@ -280,14 +355,22 @@ int main(void) {
 
     float r_text = 0.0f, p_text = 0.0f;
     float r_line = 0.0f, p_line = 0.0f;
-    mode_t mode = MODE_BUBBLE;
 
-    /* Battery is slow-changing — read once per second (~40 frames) */
-    uint8_t bat = bat_percent();
-    uint16_t bat_mv_val = bat_mv();
+    uint8_t  bat      = bat_percent();
+    uint16_t bat_mv_v = bat_mv();
     uint32_t bat_tick = 0;
 
+    view_t   view      = VIEW_BUBBLE;
+    bool     menu_open = false;
+    int8_t   menu_held = -1;       /* 0=ANGLE_MODE, 1=RPM_MODE */
+    uint32_t hold_start = 0;
+
+    bool prev_a = false, prev_b = false, prev_c = false;
+
     for (;;) {
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+
+        /* ── Sensor ─────────────────────────────────────────────── */
         int16_t raw[3];
         ism330dhcx_acceleration_raw_get(&imu, raw);
 
@@ -295,9 +378,9 @@ int main(void) {
         float ay =  (float)raw[2];
         float az = -(float)raw[1];
 
-        float r_raw = fmaxf(-75.0f, fminf(75.0f,
+        float r_raw = fmaxf(-45.0f, fminf(45.0f,
             atan2f(ay, az) * (180.0f / (float)M_PI)));
-        float p_raw = fmaxf(-75.0f, fminf(75.0f,
+        float p_raw = fmaxf(-45.0f, fminf(45.0f,
             atan2f(-ax, sqrtf(ay*ay + az*az)) * (180.0f / (float)M_PI)));
 
         r_text = ALPHA_TEXT * r_raw + (1.0f - ALPHA_TEXT) * r_text;
@@ -305,24 +388,69 @@ int main(void) {
         r_line = ALPHA_LINE * r_raw + (1.0f - ALPHA_LINE) * r_line;
         p_line = ALPHA_LINE * p_raw + (1.0f - ALPHA_LINE) * p_line;
 
-        int16_t r = (int16_t)fmaxf(-75, fminf(75, roundf(r_text)));
-        int16_t p = (int16_t)fmaxf(-75, fminf(75, roundf(p_text)));
+        int16_t r = (int16_t)fmaxf(-45, fminf(45, roundf(r_text)));
+        int16_t p = (int16_t)fmaxf(-45, fminf(45, roundf(p_text)));
 
+        /* ── Battery (once per ~second) ─────────────────────────── */
         if (++bat_tick >= 40) {
-            bat       = bat_percent();
-            bat_mv_val = bat_mv();
-            bat_tick  = 0;
-            printf("bat: %d%% (%dmV)\n", bat, bat_mv_val);
+            bat      = bat_percent();
+            bat_mv_v = bat_mv();
+            bat_tick = 0;
+            printf("bat: %d%% (%dmV)\n", bat, bat_mv_v);
         }
 
-        mode = poll_buttons(mode);
+        /* ── Buttons ────────────────────────────────────────────── */
+        bool a = !gpio_get(BTN_A);
+        bool b = !gpio_get(BTN_B);
+        bool c = !gpio_get(BTN_C);
+        bool a_dn = a && !prev_a;
+        bool b_dn = b && !prev_b;
+        bool c_dn = c && !prev_c;
 
+        if (menu_open) {
+            /* Hold A / B / C to select; release before completion cancels */
+            if (a_dn) { menu_held = 0; hold_start = now; }
+            if (b_dn) { menu_held = 1; hold_start = now; }
+            if (c_dn) { menu_held = 2; hold_start = now; }
+            if (!a && prev_a && menu_held == 0) menu_held = -1;
+            if (!b && prev_b && menu_held == 1) menu_held = -1;
+            if (!c && prev_c && menu_held == 2) menu_held = -1;
+        } else {
+            if (a_dn) { menu_open = true; menu_held = -1; }
+            if (view != VIEW_RPM && view != VIEW_STATS && b_dn) view = VIEW_BUBBLE;
+            if (view != VIEW_RPM && view != VIEW_STATS && c_dn) view = VIEW_GAUGE;
+        }
+
+        /* ── Hold progress ──────────────────────────────────────── */
+        float menu_prog = 0.0f;
+        if (menu_open && menu_held >= 0) {
+            float t = fminf((float)(now - hold_start) / (float)MENU_HOLD_MS, 1.0f);
+            menu_prog = sqrtf(t);   /* ease-out: fast start, slow finish */
+
+            if (t >= 1.0f) {
+                view      = (menu_held == 0) ? VIEW_BUBBLE
+                          : (menu_held == 1) ? VIEW_RPM : VIEW_STATS;
+                menu_open = false;
+                menu_held = -1;
+            }
+        }
+
+        prev_a = a; prev_b = b; prev_c = c;
+
+        /* ── Draw ───────────────────────────────────────────────── */
         u8g2_ClearBuffer(&u8g2);
-        switch (mode) {
-        case MODE_BUBBLE: draw_bubble(r_line, p_line, bat);        break;
-        case MODE_SPLIT:  draw_split(r_line, p_line, r, p, bat);   break;
-        case MODE_NYI:    draw_nyi();                               break;
+
+        if (menu_open) {
+            draw_menu(menu_held, menu_prog);
+        } else {
+            switch (view) {
+            case VIEW_BUBBLE: draw_bubble(r_line, p_line, bat);         break;
+            case VIEW_GAUGE:  draw_gauge(r_line, p_line, r, p, bat);    break;
+            case VIEW_RPM:    draw_rpm();                                break;
+            case VIEW_STATS:  draw_stats();                              break;
+            }
         }
+
         u8g2_SendBuffer(&u8g2);
     }
 }
