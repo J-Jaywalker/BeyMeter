@@ -24,6 +24,17 @@ The BeyBeetle reads launch angle and rotational speed from an IMU strapped to yo
 
 All angle readings are smoothed with an exponential moving average so the display doesn't jitter, and a small battery icon in the corner keeps an eye on charge level so you're not caught out mid-session.
 
+## Roadmap
+
+**1. Launch detection**
+Before RPM mode can mean anything, the BeyBeetle needs to know when a launch actually happened. The plan is to add a sensor or mechanism that detects the moment the beyblade leaves the launcher, so the angle at the exact point of release can be recorded rather than just whatever angle you happened to be holding a second beforehand. Everything else builds on this.
+
+**2. RPM mode**
+Once launch detection is solid, RPM measurement is next. The IMU can track rotational speed on the way out, so the goal is to get a reliable launch RPM reading that gets logged alongside the angle. This is the headline feature and it'll get done properly rather than rushed.
+
+**3. Polish and wrap-up**
+The final stretch — finishing the 3D printed chassis, tightening up the UI, wiring in stat recall from flash so your records survive a power cycle, and general improvements that come out of actually using the thing in the field. This is also where the stats screen stops saying N/A.
+
 ## First-time setup
 
 Open WSL and run these steps:
