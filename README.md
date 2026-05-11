@@ -1,6 +1,6 @@
 # BeyBeetle (WIP)
 
-![The Beybeetle](./assets/readme/Beybeetle.png)
+![The Beybeetle](./assets/readme/BeyBeetle.png)
 
 The BeyBeetle is a custom tool used to measure the angle and RPM of beyblade launches. This repo contains instructions and resources to create a BeyBeetle of your own!
 
