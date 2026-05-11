@@ -1,5 +1,7 @@
 # BeyBeetle (WIP)
 
+![The Beybeetle](./assets/readme/Beybeetle.png)
+
 The BeyBeetle is a custom tool used to measure the angle and RPM of beyblade launches. This repo contains instructions and resources to create a BeyBeetle of your own!
 
 ## Design Philosophy
@@ -14,7 +16,7 @@ Why a Beetle? I like beetles, they are one of my favourite animals and my other 
 
 ## What it does
 
-The BeyBeetle reads launch angle and rotational speed from an IMU strapped to your launcher. On boot it shows a splash screen — press A, B, then C to unlock it and land in the navigation menu, where you hold a button to pick your mode.
+The BeyBeetle reads launch angle and rotational speed from an IMU and IR interrupt sensor strapped to your launcher. On boot it shows a splash screen — press A, B, then C to unlock it and land in the navigation menu, where you hold a button to pick your mode.
 
 **Angle Mode** gives you two views. The bubble level is a spirit level style display with concentric rings showing how far off-axis you are, and a dot that moves in real time as you tilt the launcher — think of it like a crosshair you're trying to keep centred. The gauge view splits the screen in half and shows roll and pitch as large numbers with animated indicator lines and directional chevrons, so you can read it at a glance mid-launch.
 
@@ -86,8 +88,14 @@ make clean  # wipe build artifacts
 
 ## Hardware
 
-| Component | Connection |
-|-----------|------------|
-| Adafruit Feather RP2040 | — |
-| ISM330DHCX IMU | STEMMA QT (I2C) |
-| SH1107 Display | STEMMA QT (I2C) |
+| Component | Connection | Purpose |
+|-----------|------------|------------|
+| Adafruit Feather RP2040 | — | Main board |
+| ISM330DHCX IMU | STEMMA QT (I2C) | Tilt and pitch angle measurement |
+| MAX17048 LiPo fuel gauge | STEMMA QT (I2C) | Battery management |
+| TRCT5000 IR sensor | GPIO | RPM measurement |
+| D2F micro switch | GPIO |  Beyblde "lock-in" detection |
+| Adafruit EyeSPI | SPI | Enables FFC cable connection |
+| Adafruit 4313 1.3" 240x240 TFT IPS display | EyeSPI | Display |
+
+Full bill of materials in [`bom/`](bom/).

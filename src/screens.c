@@ -43,9 +43,8 @@ static void draw_battery(uint8_t pct) {
 void draw_bubble(float roll, float pitch, uint8_t bat) {
     u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
 
-    u8g2_DrawFrame(&u8g2, 0, 0, WIDTH, HEIGHT);
-    u8g2_DrawHLine(&u8g2, 2, HEIGHT / 2, WIDTH - 4);
-    u8g2_DrawVLine(&u8g2, WIDTH / 2, 2, HEIGHT - 4);
+    u8g2_DrawHLine(&u8g2, 0, HEIGHT / 2, WIDTH);
+    u8g2_DrawVLine(&u8g2, WIDTH / 2, 0, HEIGHT);
     u8g2_DrawCircle(&u8g2, WIDTH / 2, HEIGHT / 2, 4, U8G2_DRAW_ALL);
 
     for (int deg = 15; deg <= (int)BUBBLE_MAX_DEG; deg += 15) {

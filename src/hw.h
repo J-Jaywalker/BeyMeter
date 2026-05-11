@@ -40,3 +40,5 @@ void         hw_init(void);
 stmdev_ctx_t hw_imu_init(void);
 uint8_t      bat_percent(void);
 uint16_t     bat_mv(void);
+int16_t      bat_crate(void);
+bool         bat_charging(void);

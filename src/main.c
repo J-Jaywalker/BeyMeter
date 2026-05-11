@@ -59,9 +59,11 @@ int main(void) {
     float r_text = 0.0f, p_text = 0.0f;
     float r_line = 0.0f, p_line = 0.0f;
 
-    uint8_t  bat       = bat_percent();
-    uint16_t bat_mv_v  = bat_mv();
-    uint32_t bat_tick  = 0;
+    uint8_t  bat        = bat_percent();
+    uint16_t bat_mv_v   = bat_mv();
+    uint32_t bat_tick   = 0;
+    bool     charging   = bat_charging();
+    float    charge_anim = (float)bat;
 
     view_t   view       = VIEW_BUBBLE;
     bool     menu_open  = true;
@@ -77,9 +79,9 @@ int main(void) {
         int16_t raw[3];
         ism330dhcx_acceleration_raw_get(&imu, raw);
 
-        float ax =  (float)raw[0];
-        float ay =  (float)raw[2];
-        float az = -(float)raw[1];
+        float ax =  (float)raw[2];
+        float ay =  (float)raw[0];
+        float az =  (float)raw[1];
 
         float r_raw = fmaxf(-45.0f, fminf(45.0f,
             atan2f(ay, az) * (180.0f / (float)M_PI)));
@@ -99,8 +101,17 @@ int main(void) {
             bat      = bat_percent();
             bat_mv_v = bat_mv();
             bat_tick = 0;
-            printf("bat: %d%% (%dmV)\n", bat, bat_mv_v);
+            bool was_charging = charging;
+            charging = bat_charging();
+            if (!was_charging && charging) charge_anim = (float)bat;
+            printf("bat: %d%% (%dmV) crate:%d %s\n", bat, bat_mv_v, bat_crate(), charging ? "CHG" : "");
         }
+
+        if (charging) {
+            charge_anim += 0.5f;
+            if (charge_anim >= 100.0f) charge_anim = (float)bat;
+        }
+        uint8_t display_bat = charging ? (uint8_t)charge_anim : bat;
 
         /* ── Buttons ────────────────────────────────────────────── */
         bool a = !gpio_get(BTN_A);
@@ -146,8 +157,8 @@ int main(void) {
             draw_menu(menu_held, menu_prog);
         } else {
             switch (view) {
-            case VIEW_BUBBLE: draw_bubble(r_line, p_line, bat);      break;
-            case VIEW_GAUGE:  draw_gauge(r_line, p_line, r, p, bat); break;
+            case VIEW_BUBBLE: draw_bubble(r_line, p_line, display_bat);      break;
+            case VIEW_GAUGE:  draw_gauge(r_line, p_line, r, p, display_bat); break;
             case VIEW_RPM:    draw_rpm();                             break;
             case VIEW_STATS:  draw_stats();                           break;
             }

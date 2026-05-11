@@ -73,9 +73,21 @@ uint16_t bat_mv(void) {
     return (uint16_t)((bat_read_reg(0x02) >> 4) * 125 / 100);
 }
 
+int16_t bat_crate(void) {
+    return (int16_t)bat_read_reg(0x16);
+}
+
+bool bat_charging(void) {
+    return bat_crate() > 50;
+}
+
 /* ── Hardware init ───────────────────────────────────────────────── */
 
 void hw_init(void) {
+    gpio_init(17);
+    gpio_set_dir(17, GPIO_OUT);
+    gpio_put(17, 0);
+
     i2c_init(I2C_PORT, 400000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
