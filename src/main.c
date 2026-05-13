@@ -16,15 +16,15 @@ int main(void) {
         int16_t raw[3];
         ism330dhcx_acceleration_raw_get(&imu, raw);
 
-        // Chip upside-down: negate Z. 90° CW rotation in XY: (ax,ay)→(old_ay, -old_ax)
+        // ay=-raw[2] is the gravity axis; ax=raw[0] is roll-sensitive; az=-raw[1] is pitch-sensitive
         float ax =  (float)raw[0];
         float ay = -(float)raw[2];
         float az = -(float)raw[1];
 
         float r_raw = fmaxf(-45.0f, fminf(45.0f,
-            atan2f(ay, az) * (180.0f / (float)M_PI)));
+            atan2f(az, ay) * (180.0f / (float)M_PI)));
         float p_raw = fmaxf(-45.0f, fminf(45.0f,
-            atan2f(-ax, sqrtf(ay*ay + az*az)) * (180.0f / (float)M_PI)));
+            atan2f(-ax, ay) * (180.0f / (float)M_PI)));
 
         roll  = ALPHA * r_raw + (1.0f - ALPHA) * roll;
         pitch = ALPHA * p_raw + (1.0f - ALPHA) * pitch;

@@ -16,8 +16,6 @@
 
 static const int16_t s_ring_r[3] = {R15, R30, R45};
 
-/* ── Primitives ──────────────────────────────────────────────────── */
-
 static void fill_circle(int16_t cx, int16_t cy, int16_t r, uint32_t color) {
     for (int16_t y = cy - r; y <= cy + r; y++) {
         if (y < 0 || y >= HEIGHT) continue;
@@ -58,8 +56,6 @@ static void draw_vline(int16_t x, int16_t y0, int16_t y1, uint32_t color) {
     st7789_fill_rect(&g_st7789, x, y0 + Y_OFF, x1, y1 + Y_OFF, color);
 }
 
-/* ── Ring outlines (Bresenham midpoint algorithm) ────────────────── */
-
 static void ring_px(int16_t x, int16_t y, uint32_t color) {
     if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT)
         st7789_draw_point(&g_st7789, (uint16_t)x, (uint16_t)(y + Y_OFF), color);
@@ -78,7 +74,6 @@ static void draw_ring(int16_t cx, int16_t cy, int16_t r, uint32_t color) {
     }
 }
 
-// Redraws only the arc pixels of ring (ox,oy,r) that fall within clip_r of (px,py)
 static void restore_ring_arc(int16_t ox, int16_t oy, int16_t r,
                               int16_t px, int16_t py, int16_t clip_r) {
     int32_t cr2 = (int32_t)(clip_r + 1) * (clip_r + 1);
@@ -101,11 +96,9 @@ static void restore_ring_arc(int16_t ox, int16_t oy, int16_t r,
 #undef ARC_PT
 }
 
-/* ── Battery icon ────────────────────────────────────────────────── */
-
 static void draw_battery(uint8_t pct) {
     const int16_t bx = WIDTH - 30, by = 4;
-    st7789_fill_rect(&g_st7789, bx - 2, Y_OFF,      WIDTH - 1,  18 + Y_OFF,       COLOR_BLACK);
+    st7789_fill_rect(&g_st7789, bx - 2, Y_OFF, WIDTH - 1, 18 + Y_OFF, COLOR_BLACK);
     draw_hline(bx, bx + 24, by,      COLOR_WHITE);
     draw_hline(bx, bx + 24, by + 12, COLOR_WHITE);
     draw_vline(bx,      by, by + 12, COLOR_WHITE);
@@ -116,21 +109,14 @@ static void draw_battery(uint8_t pct) {
         st7789_fill_rect(&g_st7789, bx + 1, by + 1 + Y_OFF, bx + fw, by + 11 + Y_OFF, COLOR_WHITE);
 }
 
-/* ── Static background (call once at startup) ────────────────────── */
-
 void screen_init(void) {
     st7789_fill_rect(&g_st7789, 0, Y_OFF, WIDTH - 1, HEIGHT - 1 + Y_OFF, COLOR_BLACK);
-
     const int16_t cx = WIDTH / 2, cy = HEIGHT / 2;
-
     draw_hline(0, WIDTH - 1, cy, COLOR_DGRAY);
     draw_vline(cx, 0, HEIGHT - 1, COLOR_DGRAY);
-
     for (int ri = 0; ri < 3; ri++)
         draw_ring(cx, cy, s_ring_r[ri], COLOR_WHITE);
 }
-
-/* ── Bubble display (call every frame) ───────────────────────────── */
 
 void draw_bubble(float roll, float pitch, uint8_t bat) {
     static int16_t  prev_x     = WIDTH  / 2;
@@ -145,19 +131,17 @@ void draw_bubble(float roll, float pitch, uint8_t bat) {
     const int16_t er = BUBBLE_DOT_R + 1;
 
     float scale  = (float)BUBBLE_TRAVEL / BUBBLE_MAX_DEG;
-    int16_t dot_x = cx - (int16_t)(pitch * scale);
-    int16_t dot_y = cy - (int16_t)(roll  * scale);
-    dot_x = (int16_t)fmaxf(BUBBLE_DOT_R + 2, fminf(WIDTH  - BUBBLE_DOT_R - 3, dot_x));
-    dot_y = (int16_t)fmaxf(BUBBLE_DOT_R + 2, fminf(HEIGHT - BUBBLE_DOT_R - 3, dot_y));
+    float fdx = -pitch * scale, fdy = -roll * scale;
+    float dist = sqrtf(fdx * fdx + fdy * fdy);
+    float max_r = (float)(BUBBLE_TRAVEL - BUBBLE_DOT_R - 1);
+    if (dist > max_r) { float s = max_r / dist; fdx *= s; fdy *= s; }
+    int16_t dot_x = cx + (int16_t)fdx;
+    int16_t dot_y = cy + (int16_t)fdy;
 
     float tilt = sqrtf(roll * roll + pitch * pitch);
-    uint32_t dot_color;
-    if (prev_color == COLOR_GREEN)
-        dot_color = tilt < 5.5f  ? COLOR_GREEN  : tilt < 15.5f ? COLOR_YELLOW : COLOR_RED;
-    else if (prev_color == COLOR_YELLOW)
-        dot_color = tilt < 4.5f  ? COLOR_GREEN  : tilt < 15.5f ? COLOR_YELLOW : COLOR_RED;
-    else
-        dot_color = tilt < 4.5f  ? COLOR_GREEN  : tilt < 14.5f ? COLOR_YELLOW : COLOR_RED;
+    float lo = (prev_color == COLOR_GREEN) ? 5.5f : 4.5f;
+    float hi = (prev_color == COLOR_RED)   ? 14.5f : 15.5f;
+    uint32_t dot_color = tilt < lo ? COLOR_GREEN : tilt < hi ? COLOR_YELLOW : COLOR_RED;
 
     bool moved   = (dot_x != prev_x || dot_y != prev_y);
     bool recolor = (dot_color != prev_color);
@@ -168,21 +152,12 @@ void draw_bubble(float roll, float pitch, uint8_t bat) {
     bool p_lbl_erased = will_erase && (prev_x - er < 48 && prev_y + er > HEIGHT - 19);
 
     if (moved || recolor) {
-        // 1. Erase old dot
         fill_circle(prev_x, prev_y, er, COLOR_BLACK);
-
-        // 2. Draw new dot immediately — minimises the "no dot" window to just the erase time
         fill_circle(dot_x, dot_y, BUBBLE_DOT_R, dot_color);
 
-        // 3. Restore background at OLD position
-        int16_t hx0 = (int16_t)fmaxf(0,         prev_x - er);
-        int16_t hx1 = (int16_t)fminf(WIDTH - 1, prev_x + er);
-        int16_t vy0 = (int16_t)fmaxf(0,          prev_y - er);
-        int16_t vy1 = (int16_t)fminf(HEIGHT - 1, prev_y + er);
-        draw_hline(hx0, hx1, cy, COLOR_DGRAY);
-        draw_vline(cx, vy0, vy1, COLOR_DGRAY);
+        draw_hline(prev_x - er, prev_x + er, cy, COLOR_DGRAY);
+        draw_vline(cx, prev_y - er, prev_y + er, COLOR_DGRAY);
 
-        // Restore any ring arc that passed through the erase circle
         for (int ri = 0; ri < 3; ri++) {
             int32_t dx = prev_x - cx, dy = prev_y - cy;
             float dist = sqrtf((float)(dx * dx + dy * dy));
@@ -190,7 +165,6 @@ void draw_bubble(float roll, float pitch, uint8_t bat) {
                 restore_ring_arc(cx, cy, s_ring_r[ri], prev_x, prev_y, er + 2);
         }
 
-        // 4. If old and new are close, bg restoration may have overdrawn the new dot
         int32_t sep_x = dot_x - prev_x, sep_y = dot_y - prev_y;
         int32_t sum_r  = er + BUBBLE_DOT_R + 2;
         if (sep_x * sep_x + sep_y * sep_y < sum_r * sum_r)
