@@ -10,25 +10,25 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-file(GLOB U8G2_SOURCES lib/u8g2/csrc/*.c)
-
 add_executable(BeyMeter
     src/main.c
     src/hw.c
     src/screens.c
-    ${U8G2_SOURCES}
+    src/driver_st7789_interface.c
+    lib/st7789/src/driver_st7789.c
     lib/ism330dhcx-pid/ism330dhcx_reg.c
 )
 
 target_include_directories(BeyMeter PRIVATE
-    lib/u8g2/csrc
+    src
+    lib/st7789/src
+    lib/st7789/interface
     lib/ism330dhcx-pid
 )
 
-target_link_libraries(BeyMeter pico_stdlib hardware_i2c pico_float m)
+target_link_libraries(BeyMeter pico_stdlib hardware_i2c hardware_spi pico_float m)
 
 pico_add_extra_outputs(BeyMeter)
 
-# USB serial output for debugging
-pico_enable_stdio_usb(BeyMeter 1)
+pico_enable_stdio_usb(BeyMeter 0)
 pico_enable_stdio_uart(BeyMeter 0)

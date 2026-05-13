@@ -1,39 +1,8 @@
 #include <string.h>
 #include "hw.h"
+#include "driver_st7789_interface.h"
 
-u8g2_t u8g2;
-
-/* ── u8g2 I²C callbacks ──────────────────────────────────────────── */
-
-static uint8_t i2c_buf[256];
-static uint8_t i2c_buf_len;
-
-static uint8_t u8g2_byte_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) {
-    switch (msg) {
-    case U8X8_MSG_BYTE_SEND:
-        memcpy(i2c_buf + i2c_buf_len, arg_ptr, arg_int);
-        i2c_buf_len += arg_int;
-        break;
-    case U8X8_MSG_BYTE_START_TRANSFER:
-        i2c_buf_len = 0;
-        break;
-    case U8X8_MSG_BYTE_END_TRANSFER:
-        i2c_write_blocking(I2C_PORT, u8x8_GetI2CAddress(u8x8) >> 1,
-                           i2c_buf, i2c_buf_len, false);
-        break;
-    }
-    return 1;
-}
-
-static uint8_t u8g2_gpio_delay(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) {
-    (void)u8x8; (void)arg_ptr;
-    switch (msg) {
-    case U8X8_MSG_DELAY_MILLI:   sleep_ms(arg_int); break;
-    case U8X8_MSG_DELAY_10MICRO: sleep_us(10);      break;
-    case U8X8_MSG_DELAY_100NANO: sleep_us(1);       break;
-    }
-    return 1;
-}
+st7789_handle_t g_st7789;
 
 /* ── ISM330DHCX platform wrappers ────────────────────────────────── */
 
@@ -69,43 +38,64 @@ uint8_t bat_percent(void) {
     return pct > 100 ? 100 : pct;
 }
 
-uint16_t bat_mv(void) {
-    return (uint16_t)((bat_read_reg(0x02) >> 4) * 125 / 100);
-}
-
-int16_t bat_crate(void) {
-    return (int16_t)bat_read_reg(0x16);
-}
-
-bool bat_charging(void) {
-    return bat_crate() > 50;
-}
-
 /* ── Hardware init ───────────────────────────────────────────────── */
 
 void hw_init(void) {
+    // NeoPixel power off
     gpio_init(17);
     gpio_set_dir(17, GPIO_OUT);
     gpio_put(17, 0);
 
+    // I2C for IMU and battery gauge
     i2c_init(I2C_PORT, 400000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
-    const uint btn_pins[] = { BTN_A, BTN_B, BTN_C };
-    for (int i = 0; i < 3; i++) {
-        gpio_init(btn_pins[i]);
-        gpio_set_dir(btn_pins[i], GPIO_IN);
-        gpio_pull_up(btn_pins[i]);
-    }
+    // SPI for display
+    spi_init(SPI_PORT, SPI_BAUD);
+    gpio_set_function(SPI_SCK,  GPIO_FUNC_SPI);
+    gpio_set_function(SPI_MOSI, GPIO_FUNC_SPI);
 
-    u8g2_Setup_sh1107_i2c_64x128_f(&u8g2, U8G2_R1,
-        u8g2_byte_i2c, u8g2_gpio_delay);
-    u8g2_SetI2CAddress(&u8g2, DISPLAY_ADDR << 1);
-    u8g2_InitDisplay(&u8g2);
-    u8g2_SetPowerSave(&u8g2, 0);
+    gpio_init(DISPLAY_CS);
+    gpio_set_dir(DISPLAY_CS, GPIO_OUT);
+    gpio_put(DISPLAY_CS, 1);
+
+    gpio_init(DISPLAY_DC);
+    gpio_set_dir(DISPLAY_DC, GPIO_OUT);
+    gpio_put(DISPLAY_DC, 0);
+
+    // Wire up st7789 handle
+    g_st7789.spi_init                = st7789_interface_spi_init;
+    g_st7789.spi_deinit              = st7789_interface_spi_deinit;
+    g_st7789.spi_write_cmd           = st7789_interface_spi_write_cmd;
+    g_st7789.cmd_data_gpio_init      = st7789_interface_cmd_data_gpio_init;
+    g_st7789.cmd_data_gpio_deinit    = st7789_interface_cmd_data_gpio_deinit;
+    g_st7789.cmd_data_gpio_write     = st7789_interface_cmd_data_gpio_write;
+    g_st7789.reset_gpio_init         = st7789_interface_reset_gpio_init;
+    g_st7789.reset_gpio_deinit       = st7789_interface_reset_gpio_deinit;
+    g_st7789.reset_gpio_write        = st7789_interface_reset_gpio_write;
+    g_st7789.delay_ms                = st7789_interface_delay_ms;
+    g_st7789.debug_print             = st7789_interface_debug_print;
+
+    st7789_init(&g_st7789);
+
+    // Configure display
+    st7789_sleep_out(&g_st7789);
+    sleep_ms(120);
+    st7789_set_interface_pixel_format(&g_st7789,
+        ST7789_RGB_INTERFACE_COLOR_FORMAT_65K,
+        ST7789_CONTROL_INTERFACE_COLOR_FORMAT_16_BIT);
+    st7789_set_memory_data_access_control(&g_st7789, 0xC0);
+    st7789_set_column(&g_st7789, WIDTH);
+    st7789_set_row(&g_st7789, HEIGHT + Y_OFF);
+    st7789_set_column_address(&g_st7789, 0, WIDTH - 1);
+    st7789_set_row_address(&g_st7789, Y_OFF, HEIGHT - 1 + Y_OFF);
+    st7789_display_inversion_on(&g_st7789);
+    st7789_normal_display_mode_on(&g_st7789);
+    st7789_display_on(&g_st7789);
+    sleep_ms(10);
 }
 
 /* ── IMU init ────────────────────────────────────────────────────── */

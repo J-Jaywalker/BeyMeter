@@ -2,43 +2,37 @@
 #include <stdint.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
-#include "u8g2.h"
+#include "hardware/spi.h"
+#include "driver_st7789.h"
 #include "ism330dhcx_reg.h"
 
-#define I2C_PORT     i2c1
-#define I2C_SDA      2
-#define I2C_SCL      3
-#define IMU_ADDR     0x6A
-#define DISPLAY_ADDR 0x3C
-#define BAT_ADDR     0x36
+// I2C — IMU and battery gauge (STEMMA QT)
+#define I2C_PORT  i2c1
+#define I2C_SDA   2
+#define I2C_SCL   3
+#define IMU_ADDR  0x6A
+#define BAT_ADDR  0x36
 
-#define WIDTH   128
-#define HEIGHT   64
+// SPI — display
+#define SPI_PORT    spi0
+#define SPI_SCK     18
+#define SPI_MOSI    19
+#define DISPLAY_CS  9    // D9
+#define DISPLAY_DC  10   // D10
+#define SPI_BAUD    62500000
 
-#define BTN_A  9
-#define BTN_B  8
-#define BTN_C  7
+#define WIDTH   240
+#define HEIGHT  240
 
-#define ALPHA_TEXT  0.20f
-#define ALPHA_LINE  0.08f
-#define ROLL_PPD    (HEIGHT / 5.0f)
-#define PITCH_PPD   (63.0f / 5.0f)
+#define ALPHA  0.10f
+#define Y_OFF   80      // MADCTL=0xC0: GRAM rows 80-319 map to display rows 0-239
 
 #define BUBBLE_MAX_DEG  45.0f
-#define BUBBLE_TRAVEL_X 60
-#define BUBBLE_TRAVEL_Y 28
-#define BUBBLE_DOT_R     3
+#define BUBBLE_TRAVEL   105
+#define BUBBLE_DOT_R      7
 
-#define MENU_HOLD_MS  1000
-#define MENU_ITEM_H   20
-
-typedef enum { VIEW_BUBBLE, VIEW_GAUGE, VIEW_RPM, VIEW_STATS } view_t;
-
-extern u8g2_t u8g2;
+extern st7789_handle_t g_st7789;
 
 void         hw_init(void);
 stmdev_ctx_t hw_imu_init(void);
 uint8_t      bat_percent(void);
-uint16_t     bat_mv(void);
-int16_t      bat_crate(void);
-bool         bat_charging(void);

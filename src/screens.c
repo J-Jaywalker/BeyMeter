@@ -1,180 +1,224 @@
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 #include "screens.h"
 
-/* ── Drawing helpers ─────────────────────────────────────────────── */
+#define COLOR_BLACK   0x0000UL
+#define COLOR_WHITE   0xFFFFUL
+#define COLOR_DGRAY   0x2104UL
+#define COLOR_GREEN   0x07E0UL
+#define COLOR_YELLOW  0xFFE0UL
+#define COLOR_RED     0xF800UL
 
-static void dashed_hline(int16_t x0, int16_t x1, int16_t y) {
-    for (int16_t x = x0; x <= x1; x += 6)
-        u8g2_DrawHLine(&u8g2, x, y, (x + 3 <= x1) ? 3 : x1 - x + 1);
+#define R15  ((int16_t)((float)BUBBLE_TRAVEL * 15.0f / BUBBLE_MAX_DEG))
+#define R30  ((int16_t)((float)BUBBLE_TRAVEL * 30.0f / BUBBLE_MAX_DEG))
+#define R45  ((int16_t)BUBBLE_TRAVEL)
+
+static const int16_t s_ring_r[3] = {R15, R30, R45};
+
+/* ── Primitives ──────────────────────────────────────────────────── */
+
+static void fill_circle(int16_t cx, int16_t cy, int16_t r, uint32_t color) {
+    for (int16_t y = cy - r; y <= cy + r; y++) {
+        if (y < 0 || y >= HEIGHT) continue;
+        float dy = (float)(y - cy);
+        int16_t dx = (int16_t)sqrtf((float)(r * r) - dy * dy);
+        int16_t x0 = cx - dx, x1 = cx + dx;
+        if (x0 < 0) x0 = 0;
+        if (x1 >= WIDTH) x1 = WIDTH - 1;
+        if (x0 > x1) continue;
+        if (x0 < x1) {
+            int16_t yt = y, yb = (y + 1 < HEIGHT) ? y + 1 : y - 1;
+            if (yt > yb) { int16_t t = yt; yt = yb; yb = t; }
+            st7789_fill_rect(&g_st7789, (uint16_t)x0, (uint16_t)(yt + Y_OFF),
+                             (uint16_t)x1, (uint16_t)(yb + Y_OFF), color);
+        } else {
+            st7789_draw_point(&g_st7789, (uint16_t)x0, (uint16_t)(y + Y_OFF), color);
+        }
+    }
 }
 
-static void dashed_vline(int16_t x, int16_t y0, int16_t y1) {
-    for (int16_t y = y0; y <= y1; y += 6)
-        u8g2_DrawVLine(&u8g2, x, y, (y + 3 <= y1) ? 3 : y1 - y + 1);
+static void draw_hline(int16_t x0, int16_t x1, int16_t y, uint32_t color) {
+    if (x0 > x1) { int16_t t = x0; x0 = x1; x1 = t; }
+    if (x0 < 0) x0 = 0;
+    if (x1 >= WIDTH) x1 = WIDTH - 1;
+    int16_t y1 = (y + 1 < HEIGHT) ? y + 1 : y - 1;
+    if (x0 >= x1 || y < 0 || y1 < 0 || y >= HEIGHT) return;
+    if (y > y1) { int16_t t = y; y = y1; y1 = t; }
+    st7789_fill_rect(&g_st7789, x0, y + Y_OFF, x1, y1 + Y_OFF, color);
 }
 
-static void draw_centered(int16_t cx, int16_t cy, const char *s) {
-    int16_t w        = u8g2_GetStrWidth(&u8g2, s);
-    int16_t baseline = cy + (u8g2_GetAscent(&u8g2) + u8g2_GetDescent(&u8g2)) / 2;
-    u8g2_DrawStr(&u8g2, cx - w / 2, baseline, s);
+static void draw_vline(int16_t x, int16_t y0, int16_t y1, uint32_t color) {
+    if (y0 > y1) { int16_t t = y0; y0 = y1; y1 = t; }
+    if (y0 < 0) y0 = 0;
+    if (y1 >= HEIGHT) y1 = HEIGHT - 1;
+    int16_t x1 = (x + 1 < WIDTH) ? x + 1 : x - 1;
+    if (y0 >= y1 || x < 0 || x1 < 0 || x >= WIDTH) return;
+    if (x > x1) { int16_t t = x; x = x1; x1 = t; }
+    st7789_fill_rect(&g_st7789, x, y0 + Y_OFF, x1, y1 + Y_OFF, color);
+}
+
+/* ── Ring outlines (Bresenham midpoint algorithm) ────────────────── */
+
+static void ring_px(int16_t x, int16_t y, uint32_t color) {
+    if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT)
+        st7789_draw_point(&g_st7789, (uint16_t)x, (uint16_t)(y + Y_OFF), color);
+}
+
+static void draw_ring(int16_t cx, int16_t cy, int16_t r, uint32_t color) {
+    int16_t x = 0, y = r, d = 3 - 2 * r;
+    while (y >= x) {
+        ring_px(cx+x, cy+y, color); ring_px(cx-x, cy+y, color);
+        ring_px(cx+x, cy-y, color); ring_px(cx-x, cy-y, color);
+        ring_px(cx+y, cy+x, color); ring_px(cx-y, cy+x, color);
+        ring_px(cx+y, cy-x, color); ring_px(cx-y, cy-x, color);
+        if (d < 0) d += 4 * x + 6;
+        else { d += 4 * (x - y) + 10; y--; }
+        x++;
+    }
+}
+
+// Redraws only the arc pixels of ring (ox,oy,r) that fall within clip_r of (px,py)
+static void restore_ring_arc(int16_t ox, int16_t oy, int16_t r,
+                              int16_t px, int16_t py, int16_t clip_r) {
+    int32_t cr2 = (int32_t)(clip_r + 1) * (clip_r + 1);
+    int16_t x = 0, y = r, d = 3 - 2 * r;
+
+#define ARC_PT(ax, ay) do { \
+        int32_t _dx = (int32_t)(ax) - px, _dy = (int32_t)(ay) - py; \
+        if (_dx*_dx + _dy*_dy <= cr2) ring_px((ax), (ay), COLOR_WHITE); \
+    } while (0)
+
+    while (y >= x) {
+        ARC_PT(ox+x, oy+y); ARC_PT(ox-x, oy+y);
+        ARC_PT(ox+x, oy-y); ARC_PT(ox-x, oy-y);
+        ARC_PT(ox+y, oy+x); ARC_PT(ox-y, oy+x);
+        ARC_PT(ox+y, oy-x); ARC_PT(ox-y, oy-x);
+        if (d < 0) d += 4 * x + 6;
+        else { d += 4 * (x - y) + 10; y--; }
+        x++;
+    }
+#undef ARC_PT
 }
 
 /* ── Battery icon ────────────────────────────────────────────────── */
 
 static void draw_battery(uint8_t pct) {
-    const int16_t bx = WIDTH - 14;
-    const int16_t by = 1;
-
-    u8g2_SetDrawColor(&u8g2, 0);
-    u8g2_DrawBox(&u8g2, bx - 1, 0, WIDTH - bx + 1, 8);
-
-    u8g2_SetDrawColor(&u8g2, 1);
-    u8g2_DrawFrame(&u8g2, bx, by, 12, 6);
-    u8g2_DrawBox(&u8g2, bx + 12, by + 2, 1, 2);
-
-    int16_t fill_w = (int16_t)(10 * pct / 100);
-    if (fill_w > 0)
-        u8g2_DrawBox(&u8g2, bx + 1, by + 1, fill_w, 4);
+    const int16_t bx = WIDTH - 30, by = 4;
+    st7789_fill_rect(&g_st7789, bx - 2, Y_OFF,      WIDTH - 1,  18 + Y_OFF,       COLOR_BLACK);
+    draw_hline(bx, bx + 24, by,      COLOR_WHITE);
+    draw_hline(bx, bx + 24, by + 12, COLOR_WHITE);
+    draw_vline(bx,      by, by + 12, COLOR_WHITE);
+    draw_vline(bx + 24, by, by + 12, COLOR_WHITE);
+    st7789_fill_rect(&g_st7789, bx + 25, by + 4 + Y_OFF, bx + 27, by + 9 + Y_OFF, COLOR_WHITE);
+    int16_t fw = (int16_t)(22 * pct / 100);
+    if (fw > 1)
+        st7789_fill_rect(&g_st7789, bx + 1, by + 1 + Y_OFF, bx + fw, by + 11 + Y_OFF, COLOR_WHITE);
 }
 
-/* ── Screen: spirit level bubble ─────────────────────────────────── */
+/* ── Static background (call once at startup) ────────────────────── */
+
+void screen_init(void) {
+    st7789_fill_rect(&g_st7789, 0, Y_OFF, WIDTH - 1, HEIGHT - 1 + Y_OFF, COLOR_BLACK);
+
+    const int16_t cx = WIDTH / 2, cy = HEIGHT / 2;
+
+    draw_hline(0, WIDTH - 1, cy, COLOR_DGRAY);
+    draw_vline(cx, 0, HEIGHT - 1, COLOR_DGRAY);
+
+    for (int ri = 0; ri < 3; ri++)
+        draw_ring(cx, cy, s_ring_r[ri], COLOR_WHITE);
+}
+
+/* ── Bubble display (call every frame) ───────────────────────────── */
 
 void draw_bubble(float roll, float pitch, uint8_t bat) {
-    u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
+    static int16_t  prev_x     = WIDTH  / 2;
+    static int16_t  prev_y     = HEIGHT / 2;
+    static uint32_t prev_color = COLOR_GREEN;
+    static uint8_t  prev_bat   = 255;
+    static char     prev_rbuf[8] = "";
+    static char     prev_pbuf[8] = "";
 
-    u8g2_DrawHLine(&u8g2, 0, HEIGHT / 2, WIDTH);
-    u8g2_DrawVLine(&u8g2, WIDTH / 2, 0, HEIGHT);
-    u8g2_DrawCircle(&u8g2, WIDTH / 2, HEIGHT / 2, 4, U8G2_DRAW_ALL);
+    const int16_t cx = WIDTH  / 2;
+    const int16_t cy = HEIGHT / 2;
+    const int16_t er = BUBBLE_DOT_R + 1;
 
-    for (int deg = 15; deg <= (int)BUBBLE_MAX_DEG; deg += 15) {
-        int16_t x_hs = (int16_t)((float)BUBBLE_TRAVEL_X * deg / BUBBLE_MAX_DEG);
-        int16_t y_hs = (int16_t)((float)BUBBLE_TRAVEL_Y * deg / BUBBLE_MAX_DEG);
-        int16_t cr   = y_hs / 3 < 2 ? 2 : y_hs / 3;
-        u8g2_DrawRFrame(&u8g2, WIDTH / 2 - x_hs, HEIGHT / 2 - y_hs, x_hs * 2, y_hs * 2, cr);
-    }
-
-    float sx = BUBBLE_TRAVEL_X / BUBBLE_MAX_DEG;
-    float sy = BUBBLE_TRAVEL_Y / BUBBLE_MAX_DEG;
-    int16_t dot_x = WIDTH  / 2 - (int16_t)(pitch * sx);
-    int16_t dot_y = HEIGHT / 2 - (int16_t)(roll  * sy);
+    float scale  = (float)BUBBLE_TRAVEL / BUBBLE_MAX_DEG;
+    int16_t dot_x = cx - (int16_t)(pitch * scale);
+    int16_t dot_y = cy - (int16_t)(roll  * scale);
     dot_x = (int16_t)fmaxf(BUBBLE_DOT_R + 2, fminf(WIDTH  - BUBBLE_DOT_R - 3, dot_x));
     dot_y = (int16_t)fmaxf(BUBBLE_DOT_R + 2, fminf(HEIGHT - BUBBLE_DOT_R - 3, dot_y));
-    u8g2_DrawDisc(&u8g2, dot_x, dot_y, BUBBLE_DOT_R, U8G2_DRAW_ALL);
 
-    char buf[8];
-    int r = (int)roundf(roll), p = (int)roundf(pitch);
-    snprintf(buf, sizeof(buf), "R%c%d", r >= 0 ? '+' : '-', abs(r));
-    u8g2_DrawStr(&u8g2, 3, 8, buf);
-    snprintf(buf, sizeof(buf), "P%c%d", p >= 0 ? '+' : '-', abs(p));
-    u8g2_DrawStr(&u8g2, 3, HEIGHT - 2, buf);
-    draw_battery(bat);
-}
+    float tilt = sqrtf(roll * roll + pitch * pitch);
+    uint32_t dot_color;
+    if (prev_color == COLOR_GREEN)
+        dot_color = tilt < 5.5f  ? COLOR_GREEN  : tilt < 15.5f ? COLOR_YELLOW : COLOR_RED;
+    else if (prev_color == COLOR_YELLOW)
+        dot_color = tilt < 4.5f  ? COLOR_GREEN  : tilt < 15.5f ? COLOR_YELLOW : COLOR_RED;
+    else
+        dot_color = tilt < 4.5f  ? COLOR_GREEN  : tilt < 14.5f ? COLOR_YELLOW : COLOR_RED;
 
-/* ── Screen: split roll / pitch gauge ───────────────────────────── */
+    bool moved   = (dot_x != prev_x || dot_y != prev_y);
+    bool recolor = (dot_color != prev_color);
 
-void draw_gauge(float r_line, float p_line, int16_t r, int16_t p, uint8_t bat) {
-    u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
+    bool will_erase   = (moved || recolor);
+    bool bat_erased   = will_erase && (prev_x + er >= WIDTH - 32 && prev_y - er <= 18);
+    bool r_lbl_erased = will_erase && (prev_x - er < 48 && prev_y - er < 18);
+    bool p_lbl_erased = will_erase && (prev_x - er < 48 && prev_y + er > HEIGHT - 19);
 
-    int16_t roll_y  = (((int16_t)(32.0f + r_line * ROLL_PPD) % HEIGHT) + HEIGHT) % HEIGHT;
-    int16_t pitch_x = 65 + ((((int16_t)(31.0f - p_line * PITCH_PPD) % 63) + 63) % 63);
+    if (moved || recolor) {
+        // 1. Erase old dot
+        fill_circle(prev_x, prev_y, er, COLOR_BLACK);
 
-    u8g2_DrawVLine(&u8g2, 63, 0, HEIGHT);
-    dashed_hline(0, 62, roll_y);
-    dashed_vline(pitch_x, 0, HEIGHT - 1);
+        // 2. Draw new dot immediately — minimises the "no dot" window to just the erase time
+        fill_circle(dot_x, dot_y, BUBBLE_DOT_R, dot_color);
 
-    u8g2_SetDrawColor(&u8g2, 0);
-    u8g2_DrawBox(&u8g2,  9, 20, 44, 24);
-    u8g2_DrawBox(&u8g2, 74, 20, 44, 24);
-    u8g2_DrawBox(&u8g2, 20,  0, 23, 13);
-    u8g2_DrawBox(&u8g2, 20, 51, 23, 13);
-    u8g2_DrawBox(&u8g2, 65, 24, 11, 17);
-    u8g2_DrawBox(&u8g2,119, 24,  9, 17);
-    u8g2_SetDrawColor(&u8g2, 1);
+        // 3. Restore background at OLD position
+        int16_t hx0 = (int16_t)fmaxf(0,         prev_x - er);
+        int16_t hx1 = (int16_t)fminf(WIDTH - 1, prev_x + er);
+        int16_t vy0 = (int16_t)fmaxf(0,          prev_y - er);
+        int16_t vy1 = (int16_t)fminf(HEIGHT - 1, prev_y + er);
+        draw_hline(hx0, hx1, cy, COLOR_DGRAY);
+        draw_vline(cx, vy0, vy1, COLOR_DGRAY);
 
-    if (r > 0) u8g2_DrawTriangle(&u8g2, 31,  2, 23, 10, 39, 10);
-    if (r < 0) u8g2_DrawTriangle(&u8g2, 31, 62, 23, 54, 39, 54);
-    if (p > 0) u8g2_DrawTriangle(&u8g2, 67, 32, 73, 26, 73, 38);
-    if (p < 0) u8g2_DrawTriangle(&u8g2,127, 32,121, 26,121, 38);
-
-    char r_str[4], p_str[4];
-    snprintf(r_str, sizeof(r_str), "%02d", abs(r));
-    snprintf(p_str, sizeof(p_str), "%02d", abs(p));
-    draw_centered(31, 32, r_str);
-    draw_centered(96, 32, p_str);
-
-    draw_battery(bat);
-}
-
-/* ── Screen: RPM mode placeholder ───────────────────────────────── */
-
-void draw_rpm(void) {
-    u8g2_SetFont(&u8g2, u8g2_font_profont17_tf);
-    draw_centered(WIDTH / 2, 22, "RPM MODE");
-    draw_centered(WIDTH / 2, 45, "TBD");
-}
-
-/* ── Screen: stats ───────────────────────────────────────────────── */
-
-static void draw_beetle(void) {
-    const int16_t ox = 110, oy = 1;
-
-    u8g2_DrawLine(&u8g2, ox+5, oy+5, ox+2, oy+1);
-    u8g2_DrawLine(&u8g2, ox+5, oy+5, ox+4, oy+2);
-    u8g2_DrawLine(&u8g2, ox+9, oy+5, ox+12, oy+1);
-    u8g2_DrawLine(&u8g2, ox+9, oy+5, ox+10, oy+2);
-
-    u8g2_DrawDisc(&u8g2, ox+7, oy+7, 2, U8G2_DRAW_ALL);
-    u8g2_DrawBox(&u8g2, ox+5, oy+10, 5, 3);
-    u8g2_DrawRBox(&u8g2, ox+4, oy+13, 7, 8, 2);
-    u8g2_DrawVLine(&u8g2, ox+7, oy+14, 6);
-
-    u8g2_DrawLine(&u8g2, ox+5, oy+11, ox+2, oy+9);
-    u8g2_DrawLine(&u8g2, ox+5, oy+13, ox+2, oy+12);
-    u8g2_DrawLine(&u8g2, ox+5, oy+17, ox+2, oy+19);
-    u8g2_DrawLine(&u8g2, ox+9, oy+11, ox+12, oy+9);
-    u8g2_DrawLine(&u8g2, ox+9, oy+13, ox+12, oy+12);
-    u8g2_DrawLine(&u8g2, ox+9, oy+17, ox+12, oy+19);
-}
-
-void draw_stats(void) {
-    u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
-    u8g2_DrawStr(&u8g2, 2,  8,  "BEYBEETLE V0.1");
-    u8g2_DrawHLine(&u8g2, 0, 11, WIDTH);
-    u8g2_DrawStr(&u8g2, 2, 22,  "BLADER: CHAMBER");
-    u8g2_DrawStr(&u8g2, 2, 32,  "TOP SHOOT: N/A");
-    u8g2_DrawStr(&u8g2, 2, 42,  "LAUNCHES: N/A");
-    draw_beetle();
-}
-
-/* ── Menu overlay ────────────────────────────────────────────────── */
-
-void draw_menu(int8_t held_item, float progress) {
-    const char *labels[3] = { "ANGLE_MODE_", "RPM_MODE_", "STATS_" };
-
-    u8g2_SetDrawColor(&u8g2, 0);
-    u8g2_DrawBox(&u8g2, 0, 0, WIDTH, HEIGHT);
-    u8g2_SetDrawColor(&u8g2, 1);
-    u8g2_DrawFrame(&u8g2, 0, 0, WIDTH, HEIGHT);
-
-    u8g2_SetFont(&u8g2, u8g2_font_profont12_tf);
-    int16_t ascent  = u8g2_GetAscent(&u8g2);
-    int16_t descent = u8g2_GetDescent(&u8g2);
-
-    for (int i = 0; i < 3; i++) {
-        int16_t iy       = 2 + i * MENU_ITEM_H;
-        int16_t ih       = MENU_ITEM_H - 1;
-        int16_t baseline = iy + ih / 2 + (ascent + descent) / 2;
-
-        u8g2_SetDrawColor(&u8g2, 1);
-        u8g2_DrawStr(&u8g2, 5, baseline, labels[i]);
-
-        float item_prog = (i == held_item) ? progress : 0.0f;
-        if (item_prog > 0.0f) {
-            int16_t fw = (int16_t)((WIDTH - 2) * item_prog);
-            u8g2_SetDrawColor(&u8g2, 2);
-            u8g2_DrawBox(&u8g2, 1, iy, fw, ih);
-            u8g2_SetDrawColor(&u8g2, 1);
+        // Restore any ring arc that passed through the erase circle
+        for (int ri = 0; ri < 3; ri++) {
+            int32_t dx = prev_x - cx, dy = prev_y - cy;
+            float dist = sqrtf((float)(dx * dx + dy * dy));
+            if (fabsf(dist - (float)s_ring_r[ri]) <= (float)(er + 3))
+                restore_ring_arc(cx, cy, s_ring_r[ri], prev_x, prev_y, er + 2);
         }
+
+        // 4. If old and new are close, bg restoration may have overdrawn the new dot
+        int32_t sep_x = dot_x - prev_x, sep_y = dot_y - prev_y;
+        int32_t sum_r  = er + BUBBLE_DOT_R + 2;
+        if (sep_x * sep_x + sep_y * sep_y < sum_r * sum_r)
+            fill_circle(dot_x, dot_y, BUBBLE_DOT_R, dot_color);
+
+        prev_x = dot_x;
+        prev_y = dot_y;
+        prev_color = dot_color;
+    }
+
+    char rbuf[8], pbuf[8];
+    int r = (int)roundf(pitch), p = (int)roundf(roll);
+    snprintf(rbuf, sizeof(rbuf), "R%c%d", r >= 0 ? '+' : '-', abs(r));
+    snprintf(pbuf, sizeof(pbuf), "P%c%d", p >= 0 ? '+' : '-', abs(p));
+
+    if (strcmp(rbuf, prev_rbuf) != 0 || r_lbl_erased) {
+        st7789_fill_rect(&g_st7789, 0, Y_OFF, 48, 18 + Y_OFF, COLOR_BLACK);
+        st7789_write_string(&g_st7789, 4, 2 + Y_OFF, rbuf, strlen(rbuf), COLOR_WHITE, ST7789_FONT_16);
+        memcpy(prev_rbuf, rbuf, sizeof(rbuf));
+    }
+    if (strcmp(pbuf, prev_pbuf) != 0 || p_lbl_erased) {
+        st7789_fill_rect(&g_st7789, 0, HEIGHT - 19 + Y_OFF, 48, HEIGHT - 1 + Y_OFF, COLOR_BLACK);
+        st7789_write_string(&g_st7789, 4, HEIGHT - 18 + Y_OFF, pbuf, strlen(pbuf), COLOR_WHITE, ST7789_FONT_16);
+        memcpy(prev_pbuf, pbuf, sizeof(pbuf));
+    }
+
+    if (bat != prev_bat || bat_erased) {
+        draw_battery(bat);
+        prev_bat = bat;
     }
 }
