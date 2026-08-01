@@ -4,6 +4,7 @@
 #include "hardware/dma.h"
 #include "hardware/spi.h"
 #include "driver_st7789_font.h"
+#include "bb_font.h"
 
 uint16_t g_fb[WIDTH * HEIGHT];
 
@@ -105,6 +106,75 @@ void fb_string(int16_t x, int16_t y, const char *s, uint16_t color, uint8_t size
     while (*s) {
         fb_char(x, y, *s++, color, size);
         x += size / 2;
+    }
+}
+
+void fb_string_vert(int16_t x_center, int16_t y_top, const char *s,
+                    uint16_t color, uint8_t size) {
+    // Draws text rotated 90° CW: glyphs flow downward, glyph-top faces right.
+    // Row 0 of each glyph lands at x = x_center + size/2 - 1 (inner/right).
+    // Row (size-1) lands at x = x_center - size/2 (outer/left).
+    uint8_t bpc  = (uint8_t)(size / 8 + (size % 8 ? 1 : 0));  // bytes per column
+    uint8_t cols = (uint8_t)(size / 2);                        // columns = char advance width
+    int16_t half = (int16_t)(cols - 1);
+    int16_t y    = y_top;
+    while (*s) {
+        char c = *s++;
+        if (c < ' ' || c > '~') { y += (int16_t)cols; continue; }
+        uint8_t chr = (uint8_t)(c - ' ');
+        for (uint8_t ci = 0; ci < cols; ci++) {
+            int16_t sy = y + (int16_t)ci;
+            int16_t ri = 0;
+            for (uint8_t bi = 0; bi < bpc; bi++) {
+                uint8_t temp;
+                if      (size == 12) temp = gsc_st7789_ascii_1206[chr][ci * bpc + bi];
+                else if (size == 16) temp = gsc_st7789_ascii_1608[chr][ci * bpc + bi];
+                else                 temp = gsc_st7789_ascii_2412[chr][ci * bpc + bi];
+                for (uint8_t b = 0; b < 8 && ri < (int16_t)size; b++, ri++) {
+                    if (temp & 0x80)
+                        fb_set_pixel(x_center + half - ri, sy, color);
+                    temp <<= 1;
+                }
+            }
+        }
+        y += (int16_t)cols;
+    }
+}
+
+// ── Variable-width custom font ────────────────────────────────────────────
+
+void fb_bfont_char(int16_t px, int16_t py, char c, uint16_t color) {
+    if (c < 32 || c > 126) return;
+    int idx = (uint8_t)c - 32;
+    int w = bfont_widths[idx];
+    const uint8_t *d = bfont_data + bfont_offsets[idx];
+    int total = w * ((BFONT_H + 7) / 8);
+    int16_t x = px, y = py;
+    for (int i = 0; i < total; i++) {
+        uint8_t byte = d[i];
+        for (int b = 0; b < 8; b++) {
+            if (byte & 0x80) fb_set_pixel(x, y, color);
+            byte <<= 1;
+            y++;
+            if ((y - py) == BFONT_H) { y = py; x++; break; }
+        }
+    }
+}
+
+int16_t fb_bfont_width(const char *s) {
+    int16_t w = 0;
+    while (*s) {
+        int idx = (uint8_t)(*s++) - 32;
+        if (idx >= 0 && idx < 95) w += bfont_widths[idx] + 1;
+    }
+    return w > 1 ? w - 1 : 0;
+}
+
+void fb_bfont_string(int16_t x, int16_t y, const char *s, uint16_t color) {
+    while (*s) {
+        fb_bfont_char(x, y, *s, color);
+        int idx = (uint8_t)(*s++) - 32;
+        if (idx >= 0 && idx < 95) x += bfont_widths[idx] + 1;
     }
 }
 

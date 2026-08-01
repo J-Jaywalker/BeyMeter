@@ -5,12 +5,25 @@
 
 int main(void) {
     hw_init();
-    screen_init();
+
+    // ── Splash / boot checks ──────────────────────────────────────────
+    screen_splash(1, 3, "Display init");
+    sleep_ms(400);
+
+    bool imu_ok = hw_check_imu();
+    screen_splash(2, 3, imu_ok ? "IMU ready" : "IMU missing");
+    sleep_ms(350);
+
+    bool bat_ok = hw_check_battery();
+    screen_splash(3, 3, bat_ok ? "Battery OK" : "No battery");
+    sleep_ms(500);
+
+    // ── IMU setup ────────────────────────────────────────────────────
     stmdev_ctx_t imu = hw_imu_init();
 
     float roll = 0.0f, pitch = 0.0f;
-    float   last_pitch    = 0.0f, last_roll = 0.0f;
-    uint8_t bat           = bat_percent();
+    float    last_pitch   = 0.0f, last_roll = 0.0f;
+    uint8_t  bat          = bat_percent();
     uint32_t bat_tick     = 0;
     uint32_t popup_until  = 0;
     bool     was_locked   = false;
@@ -19,7 +32,6 @@ int main(void) {
         int16_t raw[3];
         ism330dhcx_acceleration_raw_get(&imu, raw);
 
-        // ay=-raw[2] is the gravity axis; ax=raw[0] is roll-sensitive; az=-raw[1] is pitch-sensitive
         float ax =  (float)raw[0];
         float ay = -(float)raw[2];
         float az = -(float)raw[1];
@@ -53,6 +65,5 @@ int main(void) {
         if (!show_popup) popup_until = 0;
 
         screen_render(roll, pitch, bat, locked, show_popup, last_pitch, last_roll);
-        // No sleep — fb_flush DMA transfer (~15ms) provides natural frame pacing
     }
 }

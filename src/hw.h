@@ -37,3 +37,5 @@ extern st7789_handle_t g_st7789;
 void         hw_init(void);
 stmdev_ctx_t hw_imu_init(void);
 uint8_t      bat_percent(void);
+bool         hw_check_imu(void);
+bool         hw_check_battery(void);

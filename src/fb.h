@@ -19,4 +19,11 @@ void fb_fill_circle(int16_t cx, int16_t cy, int16_t r, uint16_t color);
 void fb_draw_circle(int16_t cx, int16_t cy, int16_t r, uint16_t color);
 void fb_char(int16_t x, int16_t y, char c, uint16_t color, uint8_t size);
 void fb_string(int16_t x, int16_t y, const char *s, uint16_t color, uint8_t size);
+void fb_string_vert(int16_t x_center, int16_t y_top, const char *s, uint16_t color, uint8_t size);
 void fb_flush(void);
+
+// Variable-width custom font (bb_loading_font.ttf, 13 px cell)
+#define BFONT_H 13
+void    fb_bfont_char(int16_t x, int16_t y, char c, uint16_t color);
+int16_t fb_bfont_width(const char *s);
+void    fb_bfont_string(int16_t x, int16_t y, const char *s, uint16_t color);

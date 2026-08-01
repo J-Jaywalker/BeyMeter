@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdbool.h>
 #include "hw.h"
 #include "driver_st7789_interface.h"
 
@@ -104,6 +105,22 @@ void hw_init(void) {
     st7789_normal_display_mode_on(&g_st7789);
     st7789_display_on(&g_st7789);
     sleep_ms(10);
+}
+
+/* ── Hardware presence checks ────────────────────────────────────── */
+
+bool hw_check_imu(void) {
+    // ISM330DHCX WHO_AM_I = 0x0F, expected response = 0x6B
+    uint8_t reg = 0x0F, val = 0;
+    if (i2c_write_blocking(I2C_PORT, IMU_ADDR, &reg, 1, true) < 0) return false;
+    if (i2c_read_blocking(I2C_PORT, IMU_ADDR, &val, 1, false) < 0) return false;
+    return val == 0x6B;
+}
+
+bool hw_check_battery(void) {
+    // MAX17048 — just verify the device ACKs on the I2C bus
+    uint8_t reg = 0x04;  // SOC register
+    return i2c_write_blocking(I2C_PORT, BAT_ADDR, &reg, 1, false) >= 0;
 }
 
 /* ── IMU init ────────────────────────────────────────────────────── */

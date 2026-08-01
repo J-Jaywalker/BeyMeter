@@ -1,0 +1,674 @@
+<title>BeyMeter — Display Simulator</title>
+<style>
+:root {
+  --void:    #080019;
+  --field:   #73599C;
+  --arc:     #945DD5;
+  --live:    #52D352;
+  --grow:    #8CD752;
+  --heat:    #E67508;
+  --crit:    #D62908;
+  --readout: #B596DE;
+  --panel:   #0a001e;
+  --border:  #221038;
+  --mono: 'Courier New', Courier, monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--void);
+  color: var(--readout);
+  font-family: var(--mono);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px 16px 28px;
+  gap: 14px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 666px;
+}
+
+header h1 {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--field);
+  font-weight: normal;
+  flex: 1;
+}
+
+#mode-chip {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  padding: 3px 9px;
+  border: 1px solid currentColor;
+  color: var(--heat);
+  font-variant-numeric: tabular-nums;
+  min-width: 90px;
+  text-align: center;
+}
+
+#layout {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 666px;
+}
+
+#bezel {
+  position: relative;
+  flex-shrink: 0;
+  border: 1px solid var(--field);
+  line-height: 0;
+  box-shadow: 0 0 14px 2px rgba(116,89,156,0.22), inset 0 0 0 1px rgba(116,89,156,0.08);
+  transition: box-shadow 0.18s, border-color 0.18s;
+}
+#bezel.armed {
+  border-color: var(--live);
+  box-shadow: 0 0 22px 5px rgba(82,211,82,0.32), inset 0 0 0 1px rgba(82,211,82,0.12);
+}
+#bezel.popup-active {
+  border-color: var(--heat);
+  box-shadow: 0 0 18px 4px rgba(230,117,8,0.30), inset 0 0 0 1px rgba(230,117,8,0.10);
+}
+#bezel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px, transparent 1px,
+    rgba(0,0,0,0.09) 1px, rgba(0,0,0,0.09) 2px
+  );
+  pointer-events: none;
+}
+
+#display {
+  display: block;
+  width: 480px;
+  height: 480px;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+
+#panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.readouts {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border);
+}
+
+.readout {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--border);
+}
+.readout:last-child { border-bottom: none; }
+
+.rl { font-size: 8px; letter-spacing: 0.14em; color: var(--field); }
+.rv { font-size: 19px; font-variant-numeric: tabular-nums; color: var(--live); line-height: 1; }
+.ru { font-size: 10px; color: var(--field); margin-left: 1px; }
+
+.controls { display: flex; flex-direction: column; gap: 7px; }
+
+button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--readout);
+  padding: 9px 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+  transition: border-color 0.1s, color 0.1s, background 0.1s;
+  outline: none;
+}
+button:focus-visible { outline: 1px solid var(--arc); outline-offset: 2px; }
+button:hover         { border-color: var(--arc); color: var(--arc); }
+#lock-btn:hover  { border-color: var(--live); color: var(--live); }
+#lock-btn.active { border-color: var(--live); color: var(--live); background: rgba(82,211,82,0.07); }
+#rip-btn         { border-color: var(--heat); color: var(--heat); }
+#rip-btn:hover   { background: rgba(230,117,8,0.08); }
+#restart-btn { font-size: 8px; letter-spacing: 0.12em; padding: 6px 0; color: var(--field); }
+#restart-btn:hover { border-color: var(--field); color: var(--readout); }
+
+.bat-section {
+  border: 1px solid var(--border);
+  padding: 8px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bat-label { font-size: 8px; letter-spacing: 0.14em; color: var(--field); }
+.bat-row   { display: flex; align-items: center; gap: 8px; }
+.bat-row input[type=range] { flex: 1; accent-color: var(--live); height: 3px; }
+.bat-row .bat-num { font-size: 14px; color: var(--live); font-variant-numeric: tabular-nums; width: 26px; text-align: right; }
+.bat-row .bat-unit { font-size: 9px; color: var(--field); }
+
+.toggles {
+  border: 1px solid var(--border);
+  padding: 8px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tgl-lbl {
+  font-size: 9px; letter-spacing: 0.08em; color: var(--field);
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+}
+.tgl-lbl input[type=checkbox] { accent-color: var(--live); width: 11px; height: 11px; cursor: pointer; }
+
+.hints { font-size: 8px; line-height: 1.9; letter-spacing: 0.06em; color: #2e1a4a; }
+.hints span { color: var(--field); }
+</style>
+
+<header>
+  <h1>BEYMETER DISPLAY SIMULATOR</h1>
+  <div id="mode-chip">SPLASH 1/3</div>
+</header>
+
+<div id="layout">
+  <div id="bezel">
+    <canvas id="display" width="480" height="480"></canvas>
+  </div>
+
+  <div id="panel">
+    <div class="readouts">
+      <div class="readout">
+        <span class="rl">PITCH</span>
+        <span><span class="rv" id="pv">0.0</span><span class="ru">°</span></span>
+      </div>
+      <div class="readout">
+        <span class="rl">ROLL</span>
+        <span><span class="rv" id="rv">0.0</span><span class="ru">°</span></span>
+      </div>
+      <div class="readout">
+        <span class="rl">TILT</span>
+        <span><span class="rv" id="tv">0.0</span><span class="ru">°</span></span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="lock-btn">LOCK</button>
+      <button id="rip-btn">RIP CORD</button>
+    </div>
+
+    <div class="bat-section">
+      <div class="bat-label">BATTERY</div>
+      <div class="bat-row">
+        <input id="bat-slider" type="range" min="0" max="100" value="80">
+        <span class="bat-num" id="bat-num">80</span>
+        <span class="bat-unit">%</span>
+      </div>
+    </div>
+
+    <div class="toggles">
+      <label class="tgl-lbl"><input id="imu-ok" type="checkbox" checked> IMU present</label>
+      <label class="tgl-lbl"><input id="bat-ok" type="checkbox" checked> Battery present</label>
+      <button id="restart-btn">REPLAY SPLASH</button>
+    </div>
+
+    <div class="hints">
+      <span>Mouse</span> — aim display<br>
+      <span>WASD / ↑↓←→</span> — nudge<br>
+      <span>R</span> — re-centre<br>
+      <span>Space</span> — toggle lock<br>
+      <span>Enter</span> — rip cord<br>
+      <span>Esc</span> — dismiss popup
+    </div>
+  </div>
+</div>
+
+<script>
+const FW=240, FH=240, SCALE=2;
+const CX=FW>>1, CY=FH>>1;
+const MAX_DEG=45, TRAVEL=105, DOT_R=7;
+const RING_R=[35, 70, 105];
+
+const C={
+  BG:'#080019', DPURP:'#73599C', LPURP:'#945DD5',
+  NGRE:'#52D352', LNGRE:'#8CD752', ORANGE:'#E67508',
+  RED:'#D62908', LAVEND:'#B596DE'
+};
+const RING_COL=[C.LPURP, C.DPURP, C.ORANGE];
+
+const canvas=document.getElementById('display');
+const ctx=canvas.getContext('2d');
+ctx.scale(SCALE,SCALE);
+
+/* ── State ── */
+let pitch=0, roll=0, bat=80;
+let locked=false, wasLocked=false;
+let lastPitch=0, lastRoll=0, popupUntil=0;
+let prevDotCol=C.NGRE;
+let mode='splash', splashPhase=0, splashLabel='Display init';
+let splashAngle=0;
+const keys={};
+
+/* ── Arm animation state ── */
+// 'idle' → 'blinking' → 'rotating' → 'stable'
+let armState='idle', armStateStart=0, armScrollOff=0, armRotElapsed=0;
+
+// Gear-spin constants: start X (PI/4), spin ~1.875 turns clockwise, land on + (4PI ≡ 0)
+const A_SPIN_START=Math.PI/4;
+const A_SPIN_END=5*Math.PI/2;
+
+function gearAngle(t){
+  // Fast clockwise spin → overshoot → gear-tooth clunk → micro-rattle → lock
+  if(t<0.64){
+    const s=t/0.64, e=s*(2-s);                          // ease-out: builds momentum, smooth arrival
+    return A_SPIN_START+(A_SPIN_END-A_SPIN_START)*e;
+  } else if(t<0.78){
+    const s=(t-0.64)/0.14;
+    return A_SPIN_END+0.31*(1-s*s);                     // overshoot ~18°, decelerate
+  } else if(t<0.89){
+    const s=(t-0.78)/0.11;
+    return A_SPIN_END-0.12*Math.sin(s*Math.PI);         // first clunk: tooth catches, ~7° bounce back
+  } else if(t<0.96){
+    const s=(t-0.89)/0.07;
+    return A_SPIN_END+0.035*Math.sin(s*Math.PI);        // micro-rattle: gear seats fully
+  }
+  return A_SPIN_END;                                     // locked
+}
+
+/* ── Primitives ── */
+const fr=(x0,y0,x1,y1,c)=>{ctx.fillStyle=c;ctx.fillRect(x0,y0,x1-x0+1,y1-y0+1);};
+const hl=(x0,x1,y,c)    =>{ctx.fillStyle=c;ctx.fillRect(x0,y,x1-x0+1,1);};
+const vl=(x,y0,y1,c)    =>{ctx.fillStyle=c;ctx.fillRect(x,y0,1,y1-y0+1);};
+const fc=(x,y,r,c)      =>{ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=c;ctx.fill();};
+const sc=(x,y,r,c,w=1)  =>{ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.strokeStyle=c;ctx.lineWidth=w;ctx.stroke();};
+
+/* ── Arrow glyphs ── */
+const arrUp   =(x,y,c)=>{hl(x+2,x+3,y,c);hl(x+2,x+3,y+1,c);hl(x+1,x+4,y+2,c);hl(x+1,x+4,y+3,c);hl(x,x+5,y+4,c);hl(x,x+5,y+5,c);};
+const arrDown =(x,y,c)=>{hl(x,x+5,y,c);hl(x,x+5,y+1,c);hl(x+1,x+4,y+2,c);hl(x+1,x+4,y+3,c);hl(x+2,x+3,y+4,c);hl(x+2,x+3,y+5,c);};
+const arrRight=(x,y,c)=>{hl(x+4,x+5,y,c);hl(x+2,x+5,y+1,c);hl(x,x+5,y+2,c);hl(x,x+5,y+3,c);hl(x+2,x+5,y+4,c);hl(x+4,x+5,y+5,c);};
+const arrLeft =(x,y,c)=>{hl(x,x+1,y,c);hl(x,x+3,y+1,c);hl(x,x+5,y+2,c);hl(x,x+5,y+3,c);hl(x,x+3,y+4,c);hl(x,x+1,y+5,c);};
+
+/* ── Text ── */
+const FSZ={12:10, 16:14, 24:20};
+function tx(x,y,s,col,size,align='left'){
+  ctx.fillStyle=col;
+  ctx.font=`${FSZ[size]||size}px 'Courier New',monospace`;
+  ctx.textBaseline='top'; ctx.textAlign=align;
+  ctx.fillText(s,x,y);
+}
+function tw(s,size){
+  ctx.font=`${FSZ[size]||size}px 'Courier New',monospace`;
+  return ctx.measureText(s).width;
+}
+
+/* ── Colour lerp ── */
+function lerpCol(c1,c2,t){
+  const h=s=>parseInt(s,16);
+  const r=c=>[h(c.slice(1,3)),h(c.slice(3,5)),h(c.slice(5,7))];
+  const [r1,g1,b1]=r(c1),[r2,g2,b2]=r(c2);
+  return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+}
+
+/* ── Battery indicator ── */
+function drawBat(pct){
+  const bx=FW-30,by=4;
+  hl(bx,bx+24,by,C.LNGRE); hl(bx,bx+24,by+12,C.LNGRE);
+  vl(bx,by,by+12,C.LNGRE); vl(bx+24,by,by+12,C.LNGRE);
+  fr(bx+25,by+4,bx+27,by+9,C.LNGRE);
+  const fw=Math.floor(22*pct/100);
+  if(fw>1) fr(bx+1,by+1,bx+fw,by+11,C.NGRE);
+}
+
+/* ── Launch popup ── */
+function drawPopup(pp,pr){
+  const bx1=40,bx2=199,by1=70,by2=165,cx=(bx1+bx2)>>1;
+  fr(bx1,by1,bx2,by2,C.LPURP);
+  fr(bx1+2,by1+2,bx2-2,by2-2,C.BG);
+  tx(cx,by1+4,'LAUNCH ANGLES',C.NGRE,12,'center');
+  fr(bx1+2,by1+18,bx2-2,by1+19,C.ORANGE);
+  const pi=Math.round(pp), ri=Math.round(pr);
+  tx(cx,by1+26,(pi>=0?'^':'v')+Math.abs(pi),C.NGRE,24,'center');
+  tx(cx,by1+56,(ri>=0?'>':'<')+Math.abs(ri),C.NGRE,24,'center');
+}
+
+/* ── Armed overlay: corner crosses + scrolling tape ── */
+
+// Cross layout: TL(9,9), BL(9,231), BR(231,231)
+// Arms: half-length=7 (marginally smaller), half-thickness=2 (4px wide = thick)
+const ARM_LEN=7, ARM_THK=2;
+const CROSS_PTS=[[9,9],[9,231],[231,231]];
+
+// Strips are exactly as tall/wide as the cross span (ARM_LEN*2 = 14px)
+const STRIP_W=ARM_LEN*2;   // 14px
+// Left strip: x=0..STRIP_W-1, y=17..223
+// Bottom strip: x=17..223, y=FH-STRIP_W..FH-1
+const LS_Y0=ARM_LEN*2+3, LS_Y1=FH-ARM_LEN*2-3;
+const BS_X0=ARM_LEN*2+3, BS_X1=FW-ARM_LEN*2-3;
+
+function drawCross(cx,cy,angle,col){
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.rotate(angle);
+  ctx.fillStyle=col;
+  ctx.fillRect(-ARM_LEN,-ARM_THK,ARM_LEN*2,ARM_THK*2);
+  ctx.rotate(Math.PI/2);
+  ctx.fillRect(-ARM_LEN,-ARM_THK,ARM_LEN*2,ARM_THK*2);
+  ctx.restore();
+}
+
+function drawArmText(scrollOff, col){
+  // Font height matches cross span (STRIP_W=14px firmware = 28px on screen)
+  // Use (STRIP_W-2) so there's 1px padding each side
+  const FS=STRIP_W-2;   // 12px canvas → 24px on screen
+  const FONT=`bold ${FS}px 'Impact','Arial Black',sans-serif`;
+  ctx.font=FONT;
+  const seg=' ARMED ';
+  const segW=ctx.measureText(seg).width;
+  const stripLen=LS_Y1-LS_Y0;
+
+  // ── Left strip (vertical) ──────────────────────────────────────
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0,LS_Y0,STRIP_W,stripLen); ctx.clip();
+  ctx.fillStyle='rgba(18,0,36,0.88)';
+  ctx.fillRect(0,LS_Y0,STRIP_W,stripLen);
+  ctx.fillStyle=col;
+  ctx.font=FONT;
+  ctx.textBaseline='middle'; ctx.textAlign='left';
+  ctx.translate(STRIP_W/2, LS_Y0);
+  ctx.rotate(Math.PI/2);   // +canvas-X now points DOWN on screen
+  const offL=scrollOff%segW;
+  for(let i=-1; i<Math.ceil(stripLen/segW)+2; i++){
+    ctx.fillText(seg, i*segW+offL, 0);
+  }
+  ctx.restore();
+
+  // ── Bottom strip (horizontal) ──────────────────────────────────
+  const bLen=BS_X1-BS_X0;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(BS_X0,FH-STRIP_W,bLen,STRIP_W); ctx.clip();
+  ctx.fillStyle='rgba(18,0,36,0.88)';
+  ctx.fillRect(BS_X0,FH-STRIP_W,bLen,STRIP_W);
+  ctx.fillStyle=col;
+  ctx.font=FONT;
+  ctx.textBaseline='middle'; ctx.textAlign='left';
+  ctx.translate(BS_X0, FH-STRIP_W/2);
+  const offB=scrollOff%segW;
+  for(let i=-1; i<Math.ceil(bLen/segW)+2; i++){
+    ctx.fillText(seg, i*segW+offB, 0);
+  }
+  ctx.restore();
+}
+
+function updateArmState(){
+  if(mode!=='bubble') return;
+  const now=performance.now();
+
+  if(locked && armState==='idle'){
+    armState='blinking'; armStateStart=now;
+  } else if(!locked && armState!=='idle'){
+    armState='idle';
+  }
+
+  const elapsed=now-armStateStart;
+
+  // else-if prevents both transitions firing in the same frame
+  if(armState==='blinking' && elapsed>=200){
+    armState='rotating'; armStateStart=now; armRotElapsed=0;
+  } else if(armState==='rotating'){
+    armRotElapsed=now-armStateStart;
+    if(armRotElapsed>=540) armState='stable';
+  }
+
+  armScrollOff+=0.7;
+}
+
+function drawArmOverlay(){
+  if(armState==='idle') return;
+  const now=performance.now();
+  const blinkElapsed=now-armStateStart;
+  let angle, col, visible=true, textAlpha=0;
+
+  if(armState==='blinking'){
+    angle=Math.PI/4;
+    col=C.ORANGE;
+    visible=(Math.floor(blinkElapsed/50)%2===0);   // ~2 flickers over 200ms
+  } else if(armState==='rotating'){
+    const t=Math.min(armRotElapsed/540, 1);
+    angle=gearAngle(t);                            // fast spin + overshoot + gear clunk
+    const ct=Math.max(0,(armRotElapsed-340)/200);  // colour: orange → green after spin lands
+    col=lerpCol(C.ORANGE,C.NGRE,ct);
+    textAlpha=Math.max(0,(armRotElapsed-400)/140); // text fades in as gear settles
+  } else {                                         // stable
+    angle=0;
+    col=C.NGRE;
+    textAlpha=1;
+  }
+
+  if(!visible) return;
+
+  if(textAlpha>0){
+    ctx.globalAlpha=Math.min(textAlpha,1);
+    drawArmText(armScrollOff, col);
+    ctx.globalAlpha=1;
+  }
+
+  for(const [cx,cy] of CROSS_PTS) drawCross(cx,cy,angle,col);
+}
+
+/* ── Splash screen ── */
+function drawSplash(step,total,label){
+  fr(0,0,FW-1,FH-1,C.BG);
+  sc(CX,85,64,C.DPURP);
+  sc(CX,85,40,C.ORANGE);
+  for(let i=0;i<8;i++){
+    const a=splashAngle+i*Math.PI/4;
+    const px=CX+Math.cos(a)*52, py=85+Math.sin(a)*52;
+    fr(Math.round(px)-1,Math.round(py)-1,Math.round(px)+1,Math.round(py)+1,i%2===0?C.NGRE:C.LPURP);
+  }
+  ctx.save();
+  for(let i=0;i<4;i++){
+    const a=splashAngle*0.6+i*Math.PI/2;
+    ctx.beginPath();
+    ctx.moveTo(CX+Math.cos(a)*14,85+Math.sin(a)*14);
+    ctx.lineTo(CX+Math.cos(a)*36,85+Math.sin(a)*36);
+    ctx.strokeStyle=C.DPURP; ctx.lineWidth=1; ctx.stroke();
+  }
+  ctx.restore();
+  fc(CX,85,10,C.LPURP);
+  ctx.fillStyle=C.LAVEND;
+  ctx.font="bold 22px 'Courier New',monospace";
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('BB',CX,85);
+  ctx.textAlign='left'; ctx.textBaseline='top';
+  tx(CX,162,'BEYBEETLE',C.LAVEND,12,'center');
+  tx(CX,176,'BeyMeter v1.0',C.DPURP,10,'center');
+  hl(0,FW-1,196,C.ORANGE);
+  if(label){ const lw=tw(label,10); tx(Math.round((FW-lw)/2),202,label,C.LAVEND,10); }
+  const bx=20,by=220,bw=200,bh=9;
+  hl(bx,bx+bw,by,C.LPURP); hl(bx,bx+bw,by+bh,C.LPURP);
+  vl(bx,by,by+bh,C.LPURP); vl(bx+bw,by,by+bh,C.LPURP);
+  if(total>0&&step>0){ const fw=Math.floor((bw-2)*step/total); if(fw>0) fr(bx+1,by+1,bx+fw,by+bh-1,C.NGRE); }
+}
+
+/* ── Bubble view ── */
+function drawBubble(){
+  const now=performance.now();
+  if(popupUntil>0&&now>=popupUntil) popupUntil=0;
+  const showPopup=popupUntil>0&&!locked;
+
+  fr(0,0,FW-1,FH-1,C.BG);
+
+  const cc=locked?C.NGRE:C.DPURP;
+  hl(0,FW-1,CY,cc); vl(CX,0,FH-1,cc);
+  for(let i=0;i<3;i++) sc(CX,CY,RING_R[i],RING_COL[i]);
+
+  const scale=TRAVEL/MAX_DEG;
+  let fdx=pitch*scale, fdy=roll*scale;
+  const d=Math.sqrt(fdx*fdx+fdy*fdy);
+  if(d>TRAVEL){const s=TRAVEL/d;fdx*=s;fdy*=s;}
+  const dx=Math.round(CX+fdx), dy=Math.round(CY+fdy);
+
+  const tilt=Math.sqrt(roll*roll+pitch*pitch);
+  const lo=(prevDotCol===C.NGRE)?5.5:4.5;
+  const hi=(prevDotCol===C.RED)?14.5:15.5;
+  const dc=tilt<lo?C.NGRE:tilt<hi?C.ORANGE:C.RED;
+  prevDotCol=dc;
+  fc(dx,dy,DOT_R,dc);
+
+  const CH=14,AW=6,AH=6,AG=3,LG=DOT_R+6;
+  if(Math.abs(pitch)>=1){
+    const ang=String(Math.round(Math.abs(pitch)));
+    const nw=Math.ceil(tw(ang,16));
+    let ly=dy-Math.floor(CH/2);
+    ly=Math.max(0,Math.min(FH-CH-1,ly));
+    const ayo=Math.floor((CH-AH)/2);
+    if(fdx>=0){
+      let ax=dx+LG,nx=ax+AW+AG;
+      if(nx+nw>=FW){nx=FW-nw-1;ax=nx-AW-AG;} if(ax<0)ax=0;
+      arrLeft(ax,ly+ayo,C.LAVEND); tx(nx,ly,ang,C.LAVEND,16);
+    }else{
+      let ax=dx-LG-AW,nx=ax-AG-nw;
+      if(nx<0){nx=0;ax=nx+nw+AG;}
+      arrRight(ax,ly+ayo,C.LAVEND); tx(nx,ly,ang,C.LAVEND,16);
+    }
+  }
+  if(Math.abs(roll)>=1){
+    const ang=String(Math.round(Math.abs(roll)));
+    const nw=Math.ceil(tw(ang,16));
+    let ax=dx-Math.floor(AW/2),nx=dx-Math.floor(nw/2);
+    ax=Math.max(0,Math.min(FW-AW-1,ax)); nx=Math.max(0,Math.min(FW-nw-1,nx));
+    if(fdy<=0){
+      let ly=dy-LG-CH-AG-AH; if(ly<0)ly=0;
+      tx(nx,ly,ang,C.LAVEND,16); arrUp(ax,ly+CH+AG,C.LAVEND);
+    }else{
+      let ly=dy+LG; if(ly+AH+AG+CH>=FH)ly=FH-AH-AG-CH-1;
+      arrDown(ax,ly,C.LAVEND); tx(nx,ly+AH+AG,ang,C.LAVEND,16);
+    }
+  }
+
+  drawBat(bat);
+  drawArmOverlay();   // replaces old ARMED badge
+  if(showPopup) drawPopup(lastPitch,lastRoll);
+}
+
+/* ── Splash runner ── */
+async function runSplash(){
+  mode='splash'; locked=false; wasLocked=false; popupUntil=0;
+  prevDotCol=C.NGRE; armState='idle';
+  const imuOk=document.getElementById('imu-ok').checked;
+  const batOk=document.getElementById('bat-ok').checked;
+  const steps=['Display init', imuOk?'IMU ready':'IMU missing', batOk?'Battery OK':'No battery'];
+  for(let i=0;i<3;i++){
+    splashPhase=i; splashLabel=steps[i];
+    setChip(`SPLASH ${i+1}/3`,'var(--heat)');
+    await new Promise(r=>setTimeout(r,700));
+  }
+  mode='bubble'; setChip('BUBBLE','var(--live)');
+}
+
+function setChip(text,col){
+  const el=document.getElementById('mode-chip');
+  el.textContent=text; el.style.color=col;
+}
+
+/* ── Main loop ── */
+function loop(){
+  splashAngle+=0.022;
+  const S=0.35;
+  if(keys['ArrowLeft'] ||keys['a']||keys['A']) pitch=Math.max(-MAX_DEG,pitch-S);
+  if(keys['ArrowRight']||keys['d']||keys['D']) pitch=Math.min( MAX_DEG,pitch+S);
+  if(keys['ArrowUp']   ||keys['w']||keys['W']) roll =Math.max(-MAX_DEG,roll -S);
+  if(keys['ArrowDown'] ||keys['s']||keys['S']) roll =Math.min( MAX_DEG,roll +S);
+  if(keys['r']||keys['R']){pitch=0;roll=0;}
+
+  if(mode==='splash'){
+    drawSplash(splashPhase+1,3,splashLabel);
+  }else{
+    updateArmState();
+    if(wasLocked&&!locked){ lastPitch=pitch; lastRoll=roll; popupUntil=performance.now()+5000; }
+    wasLocked=locked;
+    drawBubble();
+  }
+
+  document.getElementById('pv').textContent=pitch.toFixed(1);
+  document.getElementById('rv').textContent=roll.toFixed(1);
+  document.getElementById('tv').textContent=Math.sqrt(roll*roll+pitch*pitch).toFixed(1);
+
+  const bezel=document.getElementById('bezel');
+  const now=performance.now();
+  bezel.className=locked?'armed':(popupUntil>0&&now<popupUntil&&!locked)?'popup-active':'';
+
+  requestAnimationFrame(loop);
+}
+
+/* ── Input ── */
+canvas.addEventListener('mousemove',e=>{
+  if(mode!=='bubble')return;
+  const r=canvas.getBoundingClientRect();
+  pitch=Math.max(-MAX_DEG,Math.min(MAX_DEG,((e.clientX-r.left)/SCALE-CX)*MAX_DEG/CX));
+  roll =Math.max(-MAX_DEG,Math.min(MAX_DEG,((e.clientY-r.top )/SCALE-CY)*MAX_DEG/CY));
+});
+
+canvas.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  if(mode!=='bubble')return;
+  const r=canvas.getBoundingClientRect(),t=e.touches[0];
+  pitch=Math.max(-MAX_DEG,Math.min(MAX_DEG,((t.clientX-r.left)/SCALE-CX)*MAX_DEG/CX));
+  roll =Math.max(-MAX_DEG,Math.min(MAX_DEG,((t.clientY-r.top )/SCALE-CY)*MAX_DEG/CY));
+},{passive:false});
+
+function toggleLock(){
+  if(mode!=='bubble')return;
+  locked=!locked;
+  const b=document.getElementById('lock-btn');
+  b.textContent=locked?'UNLOCK':'LOCK';
+  b.classList.toggle('active',locked);
+}
+
+function ripCord(){
+  if(mode!=='bubble')return;
+  if(locked){
+    locked=false;
+    const b=document.getElementById('lock-btn');
+    b.textContent='LOCK'; b.classList.remove('active');
+  }else{
+    lastPitch=pitch; lastRoll=roll;
+    popupUntil=performance.now()+5000;
+  }
+}
+
+document.getElementById('lock-btn').addEventListener('click',toggleLock);
+document.getElementById('rip-btn').addEventListener('click',ripCord);
+document.getElementById('restart-btn').addEventListener('click',runSplash);
+document.getElementById('bat-slider').addEventListener('input',e=>{
+  bat=+e.target.value;
+  document.getElementById('bat-num').textContent=bat;
+});
+
+document.addEventListener('keydown',e=>{
+  keys[e.key]=true;
+  if(e.key===' '){e.preventDefault();toggleLock();}
+  if(e.key==='Enter'){e.preventDefault();ripCord();}
+  if(e.key==='Escape'){popupUntil=0;}
+});
+document.addEventListener('keyup',e=>{delete keys[e.key];});
+
+runSplash();
+requestAnimationFrame(loop);
+</script>
