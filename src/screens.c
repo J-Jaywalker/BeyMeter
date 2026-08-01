@@ -16,6 +16,7 @@
 #define COLOR_ORANGE 0xE3A1U  // chest/eye accent orange #e6770b
 #define COLOR_RED    0xD141U  // danger red #d3290f
 #define COLOR_LAVEND 0xB4BBU  // lavender — floating angle labels
+#define COLOR_GREY   0x7BEFU  // mid grey — spent launch mark
 
 #define R15  ((int16_t)((float)BUBBLE_TRAVEL * 15.0f / BUBBLE_MAX_DEG))
 #define R30  ((int16_t)((float)BUBBLE_TRAVEL * 30.0f / BUBBLE_MAX_DEG))
@@ -23,7 +24,6 @@
 
 static const int16_t  s_ring_r[3]   = {R15, R30, R45};
 static const uint16_t s_ring_col[3] = {COLOR_LPURP, COLOR_DPURP, COLOR_ORANGE};
-static uint16_t s_prev_color = COLOR_NGRE;
 
 // ── Armed corner-cross animation ──────────────────────────────────────────
 #define A_LEN        7                      // cross arm half-length (px)
@@ -33,8 +33,6 @@ static uint16_t s_prev_color = COLOR_NGRE;
 #define A_BLINK_PER   50                    // ms per half-cycle (~2 flickers)
 #define A_ROT_MS     540                    // rotation phase duration (ms)
 #define A_SEG        " ARMED "
-#define A_SEG_W       42                    // 7 chars × 6 px (size-12 font)
-#define A_FS          12                    // strip font size
 #define A_LS_Y0      (A_LEN * 2 + 3)       // 17 — left strip top y
 #define A_LS_Y1      (HEIGHT - A_LEN*2 - 3)// 223 — left strip bottom y
 #define A_BS_X0      (A_LEN * 2 + 3)       // 17 — bottom strip left x
@@ -62,18 +60,20 @@ static uint16_t arm_lerp_col(uint16_t c1, uint16_t c2, uint32_t t, uint32_t tmax
     return (uint16_t)(((r1+(r2-r1)*ti/tm)<<11)|((g1+(g2-g1)*ti/tm)<<5)|(b1+(b2-b1)*ti/tm));
 }
 
-// Fills one thick arm segment in direction (adx, ady) centred at (cx, cy).
-static void arm_draw_seg(int16_t cx, int16_t cy,
-                          int16_t adx, int16_t ady, uint16_t col) {
-    int32_t L2  = (int32_t)adx*adx + (int32_t)ady*ady;
-    int32_t T2L = (int32_t)A_THK * A_THK * L2;
-    int16_t b   = A_LEN + A_THK + 1;
+// Fills one thick arm segment centred at (cx, cy). (adx, ady) is a direction
+// only — its magnitude is divided out, so len/thk set the arm geometry.
+static void draw_cross_seg(int16_t cx, int16_t cy, int16_t adx, int16_t ady,
+                           int16_t len, int16_t thk, uint16_t col) {
+    int32_t L2 = (int32_t)adx*adx + (int32_t)ady*ady;
+    int32_t A2 = (int32_t)len * len * L2;   // |along|  <= len
+    int32_t P2 = (int32_t)thk * thk * L2;   // |across| <= thk
+    int16_t b  = (int16_t)(len + thk + 1);
     for (int16_t dy = -b; dy <= b; dy++) {
         int16_t rx0 = (int16_t)(cx + b + 1), rx1 = (int16_t)(cx - b - 1);
         for (int16_t dx = -b; dx <= b; dx++) {
             int32_t a = (int32_t)adx*dx + (int32_t)ady*dy;
             int32_t p = (int32_t)(-ady)*dx + (int32_t)adx*dy;
-            if (a*a <= L2*L2 && p*p <= T2L) {
+            if (a*a <= A2 && p*p <= P2) {
                 int16_t px = (int16_t)(cx + dx);
                 if (px < rx0) rx0 = px;
                 if (px > rx1) rx1 = px;
@@ -84,10 +84,10 @@ static void arm_draw_seg(int16_t cx, int16_t cy,
 }
 
 // Draws a two-arm cross at any angle given arm-1 direction vector.
-static void arm_draw_cross(int16_t cx, int16_t cy,
-                            int16_t adx, int16_t ady, uint16_t col) {
-    arm_draw_seg(cx, cy,  adx,  ady, col);
-    arm_draw_seg(cx, cy, -ady,  adx, col);
+static void draw_cross(int16_t cx, int16_t cy, int16_t adx, int16_t ady,
+                       int16_t len, int16_t thk, uint16_t col) {
+    draw_cross_seg(cx, cy,  adx,  ady, len, thk, col);
+    draw_cross_seg(cx, cy, -ady,  adx, len, thk, col);
 }
 
 // Fast + shape (axis-aligned): two fill_rects.
@@ -97,23 +97,30 @@ static void arm_draw_plus(int16_t cx, int16_t cy, uint16_t col) {
 }
 
 static void arm_draw_strips(uint16_t col, uint32_t now_ms) {
-    uint16_t scroll = (uint16_t)((now_ms / 33) % (uint32_t)A_SEG_W);
+    // Tile period = full advance of one segment in the custom font
+    static int16_t seg_w = 0;
+    if (seg_w == 0) seg_w = (int16_t)(fb_bfont_width(A_SEG) + 1);
+    int16_t scroll = (int16_t)((now_ms / 33) % (uint32_t)seg_w);
 
     // Left strip bg (clears crosshair line that passes through)
     fb_fill_rect(0, A_LS_Y0, A_STRIP - 1, A_LS_Y1, COLOR_BG);
-    // Vertical scrolling text (fb_string_vert: glyph-top faces right/inward)
-    int16_t off_l = (int16_t)(scroll % A_SEG_W);
-    for (int16_t y = (int16_t)(A_LS_Y0 + off_l - A_SEG_W);
-         y < A_LS_Y1 + A_SEG_W; y += A_SEG_W)
-        fb_string_vert(A_STRIP / 2, y, A_SEG, col, A_FS);
+    // Vertical scrolling text — glyph-top faces right/inward, 13 px band
+    // sits at x 1..13 so the outer screen edge stays clear
+    for (int16_t y = (int16_t)(A_LS_Y0 + scroll - seg_w);
+         y < A_LS_Y1 + seg_w; y += seg_w)
+        fb_bfont_string_vert(A_STRIP - 1, y, A_SEG, col);
+    // Trim the tiles that overhang the strip ends (nothing else lives there)
+    fb_fill_rect(0, 0, A_STRIP - 1, A_LS_Y0 - 1, COLOR_BG);
+    fb_fill_rect(0, A_LS_Y1 + 1, A_STRIP - 1, HEIGHT - 1, COLOR_BG);
 
     // Bottom strip bg (clears crosshair line that passes through)
     fb_fill_rect(A_BS_X0, HEIGHT - A_STRIP, A_BS_X1, HEIGHT - 1, COLOR_BG);
-    // Horizontal scrolling text
-    int16_t off_b = (int16_t)(scroll % A_SEG_W);
-    for (int16_t x = (int16_t)(A_BS_X0 + off_b - A_SEG_W);
-         x < A_BS_X1 + A_SEG_W; x += A_SEG_W)
-        fb_string(x, HEIGHT - A_STRIP + 1, A_SEG, col, A_FS);
+    // Horizontal scrolling text — 13 px band at y 226..238
+    for (int16_t x = (int16_t)(A_BS_X0 + scroll - seg_w);
+         x < A_BS_X1 + seg_w; x += seg_w)
+        fb_bfont_string(x, HEIGHT - A_STRIP, A_SEG, col);
+    fb_fill_rect(0, HEIGHT - A_STRIP, A_BS_X0 - 1, HEIGHT - 1, COLOR_BG);
+    fb_fill_rect(A_BS_X1 + 1, HEIGHT - A_STRIP, WIDTH - 1, HEIGHT - 1, COLOR_BG);
 }
 
 static void arm_draw_overlay(bool locked, uint32_t now) {
@@ -167,7 +174,8 @@ static void arm_draw_overlay(bool locked, uint32_t now) {
     if (adx == A_LEN && ady == 0) {
         for (int i = 0; i < 3; i++) arm_draw_plus(s_acx[i], s_acy[i], col);
     } else {
-        for (int i = 0; i < 3; i++) arm_draw_cross(s_acx[i], s_acy[i], adx, ady, col);
+        for (int i = 0; i < 3; i++)
+            draw_cross(s_acx[i], s_acy[i], adx, ady, A_LEN, A_THK, col);
     }
 }
 
@@ -221,25 +229,140 @@ static void draw_battery(uint8_t pct) {
         fb_fill_rect(bx + 1, by + 1, bx + fw, by + 11, COLOR_NGRE);
 }
 
-static void draw_popup(float popup_pitch, float popup_roll) {
-    const int16_t bx1 = 40, bx2 = 199, by1 = 70, by2 = 165;
-    const int16_t cx = (bx1 + bx2) / 2;
+// ── Floating angle labels ─────────────────────────────────────────────────
+#define LBL_SIZE 16
+#define LBL_CW   8    // char width at size 16
+#define LBL_CH   16   // char height at size 16
+#define ARR_W    6    // arrow glyph width
+#define ARR_H    6    // arrow glyph height
+#define ARR_GAP  3    // gap between arrow and number
 
-    fb_fill_rect(bx1, by1, bx2, by2, COLOR_LPURP);
-    fb_fill_rect(bx1 + 2, by1 + 2, bx2 - 2, by2 - 2, COLOR_BG);
+// Arrow + number pair on each axis, laid out around the point at (px, py).
+// (fdx, fdy) is the point's offset from centre — it picks which side each
+// label sits on. `gap` is the clearance from the point's own glyph.
+static void draw_angle_labels(int16_t px, int16_t py, float fdx, float fdy,
+                              float pitch, float roll, int16_t gap,
+                              uint16_t col) {
+    // Horizontal (pitch axis): arrow adjacent to the point, number on far side
+    if (fabsf(pitch) >= 1.0f) {
+        char nbuf[6];
+        snprintf(nbuf, sizeof(nbuf), "%d", (int)roundf(fabsf(pitch)));
+        int16_t nw  = (int16_t)(strlen(nbuf) * LBL_CW);
+        int16_t ly  = py - LBL_CH / 2;
+        int16_t ayo = (LBL_CH - ARR_H) / 2;
 
-    fb_string(cx - (13 * 6) / 2, by1 + 4, "LAUNCH ANGLES", COLOR_NGRE, 12);
-    fb_fill_rect(bx1 + 2, by1 + 18, bx2 - 2, by1 + 19, COLOR_ORANGE);
+        if (ly < 0) ly = 0;
+        if (ly + LBL_CH >= HEIGHT) ly = HEIGHT - LBL_CH - 1;
 
-    char pbuf[8], rbuf[8];
-    int pi = (int)roundf(popup_pitch);
-    int ri = (int)roundf(popup_roll);
-    snprintf(pbuf, sizeof(pbuf), "%c%d", pi >= 0 ? '^' : 'v', abs(pi));
-    snprintf(rbuf, sizeof(rbuf), "%c%d", ri >= 0 ? '>' : '<', abs(ri));
-    int16_t plen = (int16_t)strlen(pbuf);
-    int16_t rlen = (int16_t)strlen(rbuf);
-    fb_string(cx - (plen * 12) / 2, by1 + 24, pbuf, COLOR_NGRE, 24);
-    fb_string(cx - (rlen * 12) / 2, by1 + 52, rbuf, COLOR_NGRE, 24);
+        if (fdx >= 0) {
+            // right of point: [←arrow] [number]
+            int16_t ax = px + gap;
+            int16_t nx = ax + ARR_W + ARR_GAP;
+            if (nx + nw >= WIDTH) { nx = WIDTH - nw - 1; ax = nx - ARR_W - ARR_GAP; }
+            if (ax < 0) ax = 0;
+            draw_arr_left(ax, ly + ayo, col);
+            fb_string(nx, ly, nbuf, col, LBL_SIZE);
+        } else {
+            // left of point: [number] [→arrow]
+            int16_t ax = px - gap - ARR_W;
+            int16_t nx = ax - ARR_GAP - nw;
+            if (nx < 0) { nx = 0; ax = nx + nw + ARR_GAP; }
+            if (ax + ARR_W >= WIDTH) ax = WIDTH - ARR_W - 1;
+            draw_arr_right(ax, ly + ayo, col);
+            fb_string(nx, ly, nbuf, col, LBL_SIZE);
+        }
+    }
+
+    // Vertical (roll axis): two-row layout, arrow between point and number
+    //   above: [number] then [↑arrow] — up arrow points down toward the point
+    //   below: [↓arrow] then [number] — down arrow points up toward the point
+    if (fabsf(roll) >= 1.0f) {
+        char nbuf[6];
+        snprintf(nbuf, sizeof(nbuf), "%d", (int)roundf(fabsf(roll)));
+        int16_t nw = (int16_t)(strlen(nbuf) * LBL_CW);
+        int16_t ax = px - ARR_W / 2;
+        int16_t nx = px - nw / 2;
+
+        if (ax < 0) ax = 0;
+        if (ax + ARR_W >= WIDTH) ax = WIDTH - ARR_W - 1;
+        if (nx < 0) nx = 0;
+        if (nx + nw >= WIDTH) nx = WIDTH - nw - 1;
+
+        if (fdy <= 0) {
+            int16_t ly = py - gap - LBL_CH - ARR_GAP - ARR_H;
+            if (ly < 0) ly = 0;
+            fb_string(nx, ly, nbuf, col, LBL_SIZE);
+            draw_arr_up(ax, ly + LBL_CH + ARR_GAP, col);
+        } else {
+            int16_t ly = py + gap;
+            if (ly + ARR_H + ARR_GAP + LBL_CH >= HEIGHT)
+                ly = HEIGHT - ARR_H - ARR_GAP - LBL_CH - 1;
+            draw_arr_down(ax, ly, col);
+            fb_string(nx, ly + ARR_H + ARR_GAP, nbuf, col, LBL_SIZE);
+        }
+    }
+}
+
+// Maps pitch/roll to a point on the bubble field, clamped to the outer ring.
+static void bubble_pos(float pitch, float roll, int16_t *px, int16_t *py,
+                       float *ofdx, float *ofdy) {
+    float scale = (float)BUBBLE_TRAVEL / BUBBLE_MAX_DEG;
+    float fdx = pitch * scale, fdy = roll * scale;
+    float dist = sqrtf(fdx * fdx + fdy * fdy);
+    if (dist > (float)BUBBLE_TRAVEL) {
+        float s = (float)BUBBLE_TRAVEL / dist;
+        fdx *= s; fdy *= s;
+    }
+    *px = (int16_t)(WIDTH  / 2 + (int16_t)fdx);
+    *py = (int16_t)(HEIGHT / 2 + (int16_t)fdy);
+    *ofdx = fdx; *ofdy = fdy;
+}
+
+// ── Launch mark ───────────────────────────────────────────────────────────
+// Dropped where the bubble sat at launch: flickers as a small +, twists into
+// an X, then holds. Greys out (but stays put) once the next shot is armed, so
+// the previous launch angles can be dialled in again.
+#define M_LEN        6    // cross arm half-length — much smaller than A_LEN
+#define M_THK        1    // cross arm half-thickness (3 px arms vs the corner
+                          // crosses' 5) — X spans ~9 px against their 15
+#define M_DOT_R      2    // small enough that the X arms read past it
+#define M_GAP        (M_LEN + 5)   // label clearance
+#define M_FLICK_MS   1200          // flicker phase length
+#define M_FLICK_PER  60            // ms per half-cycle
+#define M_MORPH_MS   320           // + → X twist length
+
+// Twist keyframes: arm-1 direction, 0° (+) → 11° → 30° → 56° overshoot → 45° (X)
+static const int8_t   s_mv[5][2] = {{1,0},{5,1},{7,4},{4,6},{1,1}};
+static const uint16_t s_mt[5]    = {0, 60, 140, 230, 290};
+
+static void draw_launch_mark(float mark_pitch, float mark_roll,
+                             bool greyed, uint32_t age) {
+    int16_t mx, my;
+    float   fdx, fdy;
+    bubble_pos(mark_pitch, mark_roll, &mx, &my, &fdx, &fdy);
+
+    uint16_t col = greyed ? COLOR_GREY : COLOR_NGRE;
+    int16_t  adx = 1, ady = 1;   // settled X
+
+    if (!greyed) {
+        if (age < M_FLICK_MS) {
+            if ((age / M_FLICK_PER) % 2 != 0) return;   // off half-cycle
+            adx = 1; ady = 0;                           // still a +
+        } else if (age < M_FLICK_MS + M_MORPH_MS) {
+            uint32_t ph = age - M_FLICK_MS;
+            int step = 4;
+            for (int i = 0; i < 4; i++)
+                if (ph < (uint32_t)s_mt[i + 1]) { step = i; break; }
+            adx = s_mv[step][0];
+            ady = s_mv[step][1];
+        }
+    }
+
+    draw_cross(mx, my, adx, ady, M_LEN, M_THK, col);
+    fb_fill_circle(mx, my, M_DOT_R, col);
+    // Spent mark keeps only the crosshair — the live readout owns the numbers
+    if (!greyed)
+        draw_angle_labels(mx, my, fdx, fdy, mark_pitch, mark_roll, M_GAP, col);
 }
 
 void screen_init(void) {
@@ -282,9 +405,11 @@ void screen_splash(int step, int total, const char *label) {
 }
 
 void screen_render(float roll, float pitch, uint8_t bat, bool locked,
-                   bool popup, float popup_pitch, float popup_roll) {
+                   bool have_mark, float mark_pitch, float mark_roll,
+                   uint32_t mark_t0) {
     fb_clear(COLOR_BG);
 
+    const uint32_t now = to_ms_since_boot(get_absolute_time());
     const int16_t cx = WIDTH / 2, cy = HEIGHT / 2;
     uint16_t cross_color = locked ? COLOR_NGRE : COLOR_DPURP;
 
@@ -296,101 +421,25 @@ void screen_render(float roll, float pitch, uint8_t bat, bool locked,
     for (int i = 0; i < 3; i++)
         fb_draw_circle(cx, cy, s_ring_r[i], s_ring_col[i]);
 
+    // Previous launch mark — drawn first so the live bubble sits on top of it
+    if (have_mark) draw_launch_mark(mark_pitch, mark_roll, locked, now - mark_t0);
+
     // Bubble position: pitch drives horizontal (left/right), roll drives vertical (fwd/back)
-    float scale = (float)BUBBLE_TRAVEL / BUBBLE_MAX_DEG;
-    float fdx = pitch * scale, fdy = roll * scale;
-    float dist = sqrtf(fdx * fdx + fdy * fdy);
-    if (dist > (float)BUBBLE_TRAVEL) { float s = (float)BUBBLE_TRAVEL / dist; fdx *= s; fdy *= s; }
-    int16_t dot_x = cx + (int16_t)fdx;
-    int16_t dot_y = cy + (int16_t)fdy;
+    int16_t dot_x, dot_y;
+    float   fdx, fdy;
+    bubble_pos(pitch, roll, &dot_x, &dot_y, &fdx, &fdy);
 
-    // Bubble colour: green → orange → red, with hysteresis
-    float tilt = sqrtf(roll * roll + pitch * pitch);
-    float lo = (s_prev_color == COLOR_NGRE) ? 5.5f : 4.5f;
-    float hi = (s_prev_color == COLOR_RED)  ? 14.5f : 15.5f;
-    uint16_t dot_color = tilt < lo ? COLOR_NGRE : tilt < hi ? COLOR_ORANGE : COLOR_RED;
-    s_prev_color = dot_color;
+    fb_fill_circle(dot_x, dot_y, BUBBLE_DOT_R, COLOR_ORANGE);
 
-    fb_fill_circle(dot_x, dot_y, BUBBLE_DOT_R, dot_color);
-
-    // Floating angle labels — size 16 font, custom drawn arrows
-    #define LBL_SIZE 16
-    #define LBL_CW   8    // char width at size 16
-    #define LBL_CH   16   // char height at size 16
-    #define ARR_W    6    // arrow glyph width
-    #define ARR_H    6    // arrow glyph height
-    #define ARR_GAP  3    // gap between arrow and number
-    #define LBL_GAP  (BUBBLE_DOT_R + 6)
-
-    // Horizontal (pitch axis): arrow adjacent to dot, number on far side
-    if (fabsf(pitch) >= 1.0f) {
-        char nbuf[6];
-        snprintf(nbuf, sizeof(nbuf), "%d", (int)roundf(fabsf(pitch)));
-        int16_t nw  = (int16_t)(strlen(nbuf) * LBL_CW);
-        int16_t ly  = dot_y - LBL_CH / 2;
-        int16_t ayo = (LBL_CH - ARR_H) / 2;
-
-        if (ly < 0) ly = 0;
-        if (ly + LBL_CH >= HEIGHT) ly = HEIGHT - LBL_CH - 1;
-
-        if (fdx >= 0) {
-            // right of dot: [←arrow] [number]
-            int16_t ax = dot_x + LBL_GAP;
-            int16_t nx = ax + ARR_W + ARR_GAP;
-            if (nx + nw >= WIDTH) { nx = WIDTH - nw - 1; ax = nx - ARR_W - ARR_GAP; }
-            if (ax < 0) ax = 0;
-            draw_arr_left(ax, ly + ayo, COLOR_LAVEND);
-            fb_string(nx, ly, nbuf, COLOR_LAVEND, LBL_SIZE);
-        } else {
-            // left of dot: [number] [→arrow]
-            int16_t ax = dot_x - LBL_GAP - ARR_W;
-            int16_t nx = ax - ARR_GAP - nw;
-            if (nx < 0) { nx = 0; ax = nx + nw + ARR_GAP; }
-            if (ax + ARR_W >= WIDTH) ax = WIDTH - ARR_W - 1;
-            draw_arr_right(ax, ly + ayo, COLOR_LAVEND);
-            fb_string(nx, ly, nbuf, COLOR_LAVEND, LBL_SIZE);
-        }
-    }
-
-    // Vertical (roll axis): two-row layout, arrow between dot and number in screen space
-    //   above dot: [number] then [↑arrow] — up arrow is between number and dot below
-    //   below dot: [↓arrow] then [number] — down arrow is between dot above and number
-    if (fabsf(roll) >= 1.0f) {
-        char nbuf[6];
-        snprintf(nbuf, sizeof(nbuf), "%d", (int)roundf(fabsf(roll)));
-        int16_t nw  = (int16_t)(strlen(nbuf) * LBL_CW);
-        int16_t ax  = dot_x - ARR_W / 2;
-        int16_t nx  = dot_x - nw / 2;
-
-        if (ax < 0) ax = 0;
-        if (ax + ARR_W >= WIDTH) ax = WIDTH - ARR_W - 1;
-        if (nx < 0) nx = 0;
-        if (nx + nw >= WIDTH) nx = WIDTH - nw - 1;
-
-        if (fdy <= 0) {
-            // above dot: number on top, up-arrow below pointing toward dot
-            int16_t ly = dot_y - LBL_GAP - LBL_CH - ARR_GAP - ARR_H;
-            if (ly < 0) ly = 0;
-            fb_string(nx, ly, nbuf, COLOR_LAVEND, LBL_SIZE);
-            draw_arr_up(ax, ly + LBL_CH + ARR_GAP, COLOR_LAVEND);
-        } else {
-            // below dot: down-arrow on top pointing toward dot, number below
-            int16_t ly = dot_y + LBL_GAP;
-            if (ly + ARR_H + ARR_GAP + LBL_CH >= HEIGHT)
-                ly = HEIGHT - ARR_H - ARR_GAP - LBL_CH - 1;
-            draw_arr_down(ax, ly, COLOR_LAVEND);
-            fb_string(nx, ly + ARR_H + ARR_GAP, nbuf, COLOR_LAVEND, LBL_SIZE);
-        }
-    }
+    // Live angle labels
+    draw_angle_labels(dot_x, dot_y, fdx, fdy, pitch, roll,
+                      BUBBLE_DOT_R + 6, COLOR_LAVEND);
 
     // Battery
     draw_battery(bat);
 
     // Armed overlay — animated corner crosses + ARMED tape strips
-    arm_draw_overlay(locked, to_ms_since_boot(get_absolute_time()));
-
-    // Launch popup
-    if (popup) draw_popup(popup_pitch, popup_roll);
+    arm_draw_overlay(locked, now);
 
     fb_flush();
 }

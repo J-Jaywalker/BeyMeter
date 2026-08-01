@@ -178,6 +178,27 @@ void fb_bfont_string(int16_t x, int16_t y, const char *s, uint16_t color) {
     }
 }
 
+void fb_bfont_string_vert(int16_t x_right, int16_t y_top, const char *s,
+                          uint16_t color) {
+    // Rotated 90° CW, matching fb_string_vert: glyphs flow downward and the
+    // glyph top (row 0) lands at x_right, row BFONT_H-1 at x_right-BFONT_H+1.
+    const int bpc = (BFONT_H + 7) / 8;   // bytes per glyph column
+    int16_t y = y_top;
+    while (*s) {
+        int idx = (uint8_t)(*s++) - 32;
+        if (idx < 0 || idx >= 95) continue;
+        int w = bfont_widths[idx];
+        const uint8_t *d = bfont_data + bfont_offsets[idx];
+        for (int ci = 0; ci < w; ci++) {
+            const uint8_t *col = d + ci * bpc;
+            for (int ri = 0; ri < BFONT_H; ri++)
+                if (col[ri >> 3] & (0x80 >> (ri & 7)))
+                    fb_set_pixel((int16_t)(x_right - ri), (int16_t)(y + ci), color);
+        }
+        y += (int16_t)(w + 1);
+    }
+}
+
 // ── DMA flush ──────────────────────────────────────────────────────────────
 
 static void send_cmd(uint8_t cmd) {

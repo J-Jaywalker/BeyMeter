@@ -27,3 +27,4 @@ void fb_flush(void);
 void    fb_bfont_char(int16_t x, int16_t y, char c, uint16_t color);
 int16_t fb_bfont_width(const char *s);
 void    fb_bfont_string(int16_t x, int16_t y, const char *s, uint16_t color);
+void    fb_bfont_string_vert(int16_t x_right, int16_t y_top, const char *s, uint16_t color);

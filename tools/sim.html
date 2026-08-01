@@ -234,7 +234,7 @@ button:hover         { border-color: var(--arc); color: var(--arc); }
       <span>R</span> — re-centre<br>
       <span>Space</span> — toggle lock<br>
       <span>Enter</span> — rip cord<br>
-      <span>Esc</span> — dismiss popup
+      <span>Esc</span> — clear launch mark
     </div>
   </div>
 </div>
@@ -248,7 +248,7 @@ const RING_R=[35, 70, 105];
 const C={
   BG:'#080019', DPURP:'#73599C', LPURP:'#945DD5',
   NGRE:'#52D352', LNGRE:'#8CD752', ORANGE:'#E67508',
-  RED:'#D62908', LAVEND:'#B596DE'
+  RED:'#D62908', LAVEND:'#B596DE', GREY:'#7B7E7B'
 };
 const RING_COL=[C.LPURP, C.DPURP, C.ORANGE];
 
@@ -259,8 +259,8 @@ ctx.scale(SCALE,SCALE);
 /* ── State ── */
 let pitch=0, roll=0, bat=80;
 let locked=false, wasLocked=false;
-let lastPitch=0, lastRoll=0, popupUntil=0;
-let prevDotCol=C.NGRE;
+// Previous launch mark — only the most recent launch is kept
+let markPitch=0, markRoll=0, markT0=0, haveMark=false;
 let mode='splash', splashPhase=0, splashLabel='Display init';
 let splashAngle=0;
 const keys={};
@@ -335,16 +335,49 @@ function drawBat(pct){
   if(fw>1) fr(bx+1,by+1,bx+fw,by+11,C.NGRE);
 }
 
-/* ── Launch popup ── */
-function drawPopup(pp,pr){
-  const bx1=40,bx2=199,by1=70,by2=165,cx=(bx1+bx2)>>1;
-  fr(bx1,by1,bx2,by2,C.LPURP);
-  fr(bx1+2,by1+2,bx2-2,by2-2,C.BG);
-  tx(cx,by1+4,'LAUNCH ANGLES',C.NGRE,12,'center');
-  fr(bx1+2,by1+18,bx2-2,by1+19,C.ORANGE);
-  const pi=Math.round(pp), ri=Math.round(pr);
-  tx(cx,by1+26,(pi>=0?'^':'v')+Math.abs(pi),C.NGRE,24,'center');
-  tx(cx,by1+56,(ri>=0?'>':'<')+Math.abs(ri),C.NGRE,24,'center');
+/* ── Bubble field position + floating angle labels ── */
+const CH=14,AW=6,AH=6,AG=3;   // label cell height, arrow w/h, arrow-number gap
+
+function bubblePos(p,r){
+  const scale=TRAVEL/MAX_DEG;
+  let fdx=p*scale, fdy=r*scale;
+  const d=Math.sqrt(fdx*fdx+fdy*fdy);
+  if(d>TRAVEL){const s=TRAVEL/d;fdx*=s;fdy*=s;}
+  return [Math.round(CX+fdx), Math.round(CY+fdy), fdx, fdy];
+}
+
+// Arrow + number pair on each axis, laid out around the point at (px,py).
+// gap = clearance from the point's own glyph.
+function drawAngleLabels(px,py,fdx,fdy,p,r,gap,col){
+  if(Math.abs(p)>=1){
+    const ang=String(Math.round(Math.abs(p)));
+    const nw=Math.ceil(tw(ang,16));
+    let ly=py-Math.floor(CH/2);
+    ly=Math.max(0,Math.min(FH-CH-1,ly));
+    const ayo=Math.floor((CH-AH)/2);
+    if(fdx>=0){
+      let ax=px+gap,nx=ax+AW+AG;
+      if(nx+nw>=FW){nx=FW-nw-1;ax=nx-AW-AG;} if(ax<0)ax=0;
+      arrLeft(ax,ly+ayo,col); tx(nx,ly,ang,col,16);
+    }else{
+      let ax=px-gap-AW,nx=ax-AG-nw;
+      if(nx<0){nx=0;ax=nx+nw+AG;}
+      arrRight(ax,ly+ayo,col); tx(nx,ly,ang,col,16);
+    }
+  }
+  if(Math.abs(r)>=1){
+    const ang=String(Math.round(Math.abs(r)));
+    const nw=Math.ceil(tw(ang,16));
+    let ax=px-Math.floor(AW/2),nx=px-Math.floor(nw/2);
+    ax=Math.max(0,Math.min(FW-AW-1,ax)); nx=Math.max(0,Math.min(FW-nw-1,nx));
+    if(fdy<=0){
+      let ly=py-gap-CH-AG-AH; if(ly<0)ly=0;
+      tx(nx,ly,ang,col,16); arrUp(ax,ly+CH+AG,col);
+    }else{
+      let ly=py+gap; if(ly+AH+AG+CH>=FH)ly=FH-AH-AG-CH-1;
+      arrDown(ax,ly,col); tx(nx,ly+AH+AG,ang,col,16);
+    }
+  }
 }
 
 /* ── Armed overlay: corner crosses + scrolling tape ── */
@@ -360,26 +393,62 @@ const STRIP_W=ARM_LEN*2;   // 14px
 // Bottom strip: x=17..223, y=FH-STRIP_W..FH-1
 const LS_Y0=ARM_LEN*2+3, LS_Y1=FH-ARM_LEN*2-3;
 const BS_X0=ARM_LEN*2+3, BS_X1=FW-ARM_LEN*2-3;
+const BFONT_H=13;          // custom font cell height (fb.h BFONT_H)
 
-function drawCross(cx,cy,angle,col){
+function drawCross(cx,cy,angle,col,len=ARM_LEN,thk=ARM_THK){
   ctx.save();
   ctx.translate(cx,cy);
   ctx.rotate(angle);
   ctx.fillStyle=col;
-  ctx.fillRect(-ARM_LEN,-ARM_THK,ARM_LEN*2,ARM_THK*2);
+  ctx.fillRect(-len,-thk,len*2,thk*2);
   ctx.rotate(Math.PI/2);
-  ctx.fillRect(-ARM_LEN,-ARM_THK,ARM_LEN*2,ARM_THK*2);
+  ctx.fillRect(-len,-thk,len*2,thk*2);
   ctx.restore();
 }
 
+/* ── Launch mark ──
+   Dropped where the bubble sat at launch: flickers as a small +, twists into
+   an X, then holds. Greys out (but stays put) once the next shot is armed, so
+   the previous launch angles can be dialled in again. Drawn before the live
+   bubble so the X sits behind the dot. */
+const M_LEN=6, M_THK=1, M_DOT_R=2, M_GAP=M_LEN+5;
+const M_FLICK_MS=1200, M_FLICK_PER=60, M_MORPH_MS=320;
+// Twist keyframes [startMs, angle]: 0° (+) → 11° → 30° → 56° overshoot → 45° (X)
+const M_KEY=[[0,0],[60,Math.atan2(1,5)],[140,Math.atan2(4,7)],
+             [230,Math.atan2(6,4)],[290,Math.PI/4]];
+
+function drawLaunchMark(greyed,age){
+  const [mx,my,fdx,fdy]=bubblePos(markPitch,markRoll);
+  const col=greyed?C.GREY:C.NGRE;
+  let angle=Math.PI/4;                       // settled X
+  if(!greyed){
+    if(age<M_FLICK_MS){
+      if(Math.floor(age/M_FLICK_PER)%2!==0) return;   // off half-cycle
+      angle=0;                                        // still a +
+    }else if(age<M_FLICK_MS+M_MORPH_MS){
+      const ph=age-M_FLICK_MS;
+      angle=M_KEY[4][1];
+      for(let i=0;i<4;i++) if(ph<M_KEY[i+1][0]){angle=M_KEY[i][1];break;}
+    }
+  }
+  drawCross(mx,my,angle,col,M_LEN,M_THK);
+  fc(mx,my,M_DOT_R,col);
+  // Spent mark keeps only the crosshair — the live readout owns the numbers
+  if(!greyed) drawAngleLabels(mx,my,fdx,fdy,markPitch,markRoll,M_GAP,col);
+}
+
 function drawArmText(scrollOff, col){
-  // Font height matches cross span (STRIP_W=14px firmware = 28px on screen)
-  // Use (STRIP_W-2) so there's 1px padding each side
-  const FS=STRIP_W-2;   // 12px canvas → 24px on screen
+  // Firmware draws these strips with the custom bb font (fb_bfont_*): 13px
+  // cell, and " ARMED " advances SEG_ADV px. Impact stands in for the real
+  // glyphs here, stretched horizontally so the tile period matches exactly.
+  const FS=BFONT_H;     // 13px cell → 26px on screen
+  const SEG_ADV=67;     // fb_bfont_width(" ARMED ") + 1
   const FONT=`bold ${FS}px 'Impact','Arial Black',sans-serif`;
   ctx.font=FONT;
   const seg=' ARMED ';
-  const segW=ctx.measureText(seg).width;
+  const natW=ctx.measureText(seg).width;
+  const sx=SEG_ADV/natW;   // stretch so natW*sx === SEG_ADV
+  const segW=natW;
   const stripLen=LS_Y1-LS_Y0;
 
   // ── Left strip (vertical) ──────────────────────────────────────
@@ -390,10 +459,12 @@ function drawArmText(scrollOff, col){
   ctx.fillStyle=col;
   ctx.font=FONT;
   ctx.textBaseline='middle'; ctx.textAlign='left';
+  // Band is 13px wide at x=1..13, so its centre is x=7 (= STRIP_W/2)
   ctx.translate(STRIP_W/2, LS_Y0);
   ctx.rotate(Math.PI/2);   // +canvas-X now points DOWN on screen
-  const offL=scrollOff%segW;
-  for(let i=-1; i<Math.ceil(stripLen/segW)+2; i++){
+  ctx.scale(sx,1);         // work in natural units; renders at SEG_ADV period
+  const offL=(scrollOff%SEG_ADV)/sx;
+  for(let i=-1; i<Math.ceil(stripLen/SEG_ADV)+2; i++){
     ctx.fillText(seg, i*segW+offL, 0);
   }
   ctx.restore();
@@ -407,9 +478,11 @@ function drawArmText(scrollOff, col){
   ctx.fillStyle=col;
   ctx.font=FONT;
   ctx.textBaseline='middle'; ctx.textAlign='left';
-  ctx.translate(BS_X0, FH-STRIP_W/2);
-  const offB=scrollOff%segW;
-  for(let i=-1; i<Math.ceil(bLen/segW)+2; i++){
+  // Band is 13px tall at y=226..238, so its centre is FH-STRIP_W+BFONT_H/2
+  ctx.translate(BS_X0, FH-STRIP_W+BFONT_H/2);
+  ctx.scale(sx,1);
+  const offB=(scrollOff%SEG_ADV)/sx;
+  for(let i=-1; i<Math.ceil(bLen/SEG_ADV)+2; i++){
     ctx.fillText(seg, i*segW+offB, 0);
   }
   ctx.restore();
@@ -509,8 +582,6 @@ function drawSplash(step,total,label){
 /* ── Bubble view ── */
 function drawBubble(){
   const now=performance.now();
-  if(popupUntil>0&&now>=popupUntil) popupUntil=0;
-  const showPopup=popupUntil>0&&!locked;
 
   fr(0,0,FW-1,FH-1,C.BG);
 
@@ -518,59 +589,21 @@ function drawBubble(){
   hl(0,FW-1,CY,cc); vl(CX,0,FH-1,cc);
   for(let i=0;i<3;i++) sc(CX,CY,RING_R[i],RING_COL[i]);
 
-  const scale=TRAVEL/MAX_DEG;
-  let fdx=pitch*scale, fdy=roll*scale;
-  const d=Math.sqrt(fdx*fdx+fdy*fdy);
-  if(d>TRAVEL){const s=TRAVEL/d;fdx*=s;fdy*=s;}
-  const dx=Math.round(CX+fdx), dy=Math.round(CY+fdy);
+  // Previous launch mark — first, so the live bubble sits on top of it
+  if(haveMark) drawLaunchMark(locked, now-markT0);
 
-  const tilt=Math.sqrt(roll*roll+pitch*pitch);
-  const lo=(prevDotCol===C.NGRE)?5.5:4.5;
-  const hi=(prevDotCol===C.RED)?14.5:15.5;
-  const dc=tilt<lo?C.NGRE:tilt<hi?C.ORANGE:C.RED;
-  prevDotCol=dc;
-  fc(dx,dy,DOT_R,dc);
-
-  const CH=14,AW=6,AH=6,AG=3,LG=DOT_R+6;
-  if(Math.abs(pitch)>=1){
-    const ang=String(Math.round(Math.abs(pitch)));
-    const nw=Math.ceil(tw(ang,16));
-    let ly=dy-Math.floor(CH/2);
-    ly=Math.max(0,Math.min(FH-CH-1,ly));
-    const ayo=Math.floor((CH-AH)/2);
-    if(fdx>=0){
-      let ax=dx+LG,nx=ax+AW+AG;
-      if(nx+nw>=FW){nx=FW-nw-1;ax=nx-AW-AG;} if(ax<0)ax=0;
-      arrLeft(ax,ly+ayo,C.LAVEND); tx(nx,ly,ang,C.LAVEND,16);
-    }else{
-      let ax=dx-LG-AW,nx=ax-AG-nw;
-      if(nx<0){nx=0;ax=nx+nw+AG;}
-      arrRight(ax,ly+ayo,C.LAVEND); tx(nx,ly,ang,C.LAVEND,16);
-    }
-  }
-  if(Math.abs(roll)>=1){
-    const ang=String(Math.round(Math.abs(roll)));
-    const nw=Math.ceil(tw(ang,16));
-    let ax=dx-Math.floor(AW/2),nx=dx-Math.floor(nw/2);
-    ax=Math.max(0,Math.min(FW-AW-1,ax)); nx=Math.max(0,Math.min(FW-nw-1,nx));
-    if(fdy<=0){
-      let ly=dy-LG-CH-AG-AH; if(ly<0)ly=0;
-      tx(nx,ly,ang,C.LAVEND,16); arrUp(ax,ly+CH+AG,C.LAVEND);
-    }else{
-      let ly=dy+LG; if(ly+AH+AG+CH>=FH)ly=FH-AH-AG-CH-1;
-      arrDown(ax,ly,C.LAVEND); tx(nx,ly+AH+AG,ang,C.LAVEND,16);
-    }
-  }
+  const [dx,dy,fdx,fdy]=bubblePos(pitch,roll);
+  fc(dx,dy,DOT_R,C.ORANGE);
+  drawAngleLabels(dx,dy,fdx,fdy,pitch,roll,DOT_R+6,C.LAVEND);
 
   drawBat(bat);
   drawArmOverlay();   // replaces old ARMED badge
-  if(showPopup) drawPopup(lastPitch,lastRoll);
 }
 
 /* ── Splash runner ── */
 async function runSplash(){
-  mode='splash'; locked=false; wasLocked=false; popupUntil=0;
-  prevDotCol=C.NGRE; armState='idle';
+  mode='splash'; locked=false; wasLocked=false; haveMark=false;
+  armState='idle';
   const imuOk=document.getElementById('imu-ok').checked;
   const batOk=document.getElementById('bat-ok').checked;
   const steps=['Display init', imuOk?'IMU ready':'IMU missing', batOk?'Battery OK':'No battery'];
@@ -601,7 +634,8 @@ function loop(){
     drawSplash(splashPhase+1,3,splashLabel);
   }else{
     updateArmState();
-    if(wasLocked&&!locked){ lastPitch=pitch; lastRoll=roll; popupUntil=performance.now()+5000; }
+    // Lock released = launch: drop a mark where the bubble was sitting
+    if(wasLocked&&!locked) setMark();
     wasLocked=locked;
     drawBubble();
   }
@@ -612,7 +646,8 @@ function loop(){
 
   const bezel=document.getElementById('bezel');
   const now=performance.now();
-  bezel.className=locked?'armed':(popupUntil>0&&now<popupUntil&&!locked)?'popup-active':'';
+  const marking=haveMark&&!locked&&(now-markT0)<M_FLICK_MS+M_MORPH_MS;
+  bezel.className=locked?'armed':marking?'popup-active':'';
 
   requestAnimationFrame(loop);
 }
@@ -641,15 +676,19 @@ function toggleLock(){
   b.classList.toggle('active',locked);
 }
 
+function setMark(){
+  markPitch=pitch; markRoll=roll;
+  markT0=performance.now(); haveMark=true;
+}
+
 function ripCord(){
   if(mode!=='bubble')return;
   if(locked){
-    locked=false;
+    locked=false;   // loop() sees the release and drops the mark
     const b=document.getElementById('lock-btn');
     b.textContent='LOCK'; b.classList.remove('active');
   }else{
-    lastPitch=pitch; lastRoll=roll;
-    popupUntil=performance.now()+5000;
+    setMark();
   }
 }
 
@@ -665,7 +704,7 @@ document.addEventListener('keydown',e=>{
   keys[e.key]=true;
   if(e.key===' '){e.preventDefault();toggleLock();}
   if(e.key==='Enter'){e.preventDefault();ripCord();}
-  if(e.key==='Escape'){popupUntil=0;}
+  if(e.key==='Escape'){haveMark=false;}   // clear the launch mark
 });
 document.addEventListener('keyup',e=>{delete keys[e.key];});
 

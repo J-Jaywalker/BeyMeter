@@ -22,10 +22,11 @@ int main(void) {
     stmdev_ctx_t imu = hw_imu_init();
 
     float roll = 0.0f, pitch = 0.0f;
-    float    last_pitch   = 0.0f, last_roll = 0.0f;
+    float    mark_pitch   = 0.0f, mark_roll = 0.0f;
+    uint32_t mark_t0      = 0;
+    bool     have_mark    = false;
     uint8_t  bat          = bat_percent();
     uint32_t bat_tick     = 0;
-    uint32_t popup_until  = 0;
     bool     was_locked   = false;
 
     for (;;) {
@@ -51,19 +52,17 @@ int main(void) {
 
         bool locked = !gpio_get(BTN_LOCK);
 
+        // Lock released = launch: drop a mark where the bubble was sitting.
+        // Only the most recent launch is kept.
         if (was_locked && !locked) {
-            last_pitch  = pitch;
-            last_roll   = roll;
-            popup_until = to_ms_since_boot(get_absolute_time()) + 5000;
+            mark_pitch = pitch;
+            mark_roll  = roll;
+            mark_t0    = to_ms_since_boot(get_absolute_time());
+            have_mark  = true;
         }
         was_locked = locked;
 
-        bool show_popup = (popup_until > 0)
-            && !locked
-            && (to_ms_since_boot(get_absolute_time()) < popup_until);
-
-        if (!show_popup) popup_until = 0;
-
-        screen_render(roll, pitch, bat, locked, show_popup, last_pitch, last_roll);
+        screen_render(roll, pitch, bat, locked,
+                      have_mark, mark_pitch, mark_roll, mark_t0);
     }
 }
