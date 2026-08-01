@@ -13,6 +13,7 @@ pico_sdk_init()
 add_executable(BeyMeter
     src/main.c
     src/hw.c
+    src/fb.c
     src/screens.c
     src/driver_st7789_interface.c
     lib/st7789/src/driver_st7789.c
@@ -26,7 +27,7 @@ target_include_directories(BeyMeter PRIVATE
     lib/ism330dhcx-pid
 )
 
-target_link_libraries(BeyMeter pico_stdlib hardware_i2c hardware_spi pico_float m)
+target_link_libraries(BeyMeter pico_stdlib hardware_i2c hardware_spi hardware_dma pico_float m)
 
 pico_add_extra_outputs(BeyMeter)
 

@@ -3,282 +3,118 @@
 #include <string.h>
 #include <math.h>
 #include "screens.h"
+#include "fb.h"
 
-#define COLOR_BLACK   0x0000UL
-#define COLOR_WHITE   0xFFFFUL
-#define COLOR_DGRAY   0x2104UL
-#define COLOR_ORANGE  0xFD20UL
-#define COLOR_GREEN   0x07E0UL
-#define COLOR_YELLOW  0xFFE0UL
-#define COLOR_RED     0xF800UL
+#define COLOR_BLACK   0x0000U
+#define COLOR_WHITE   0xFFFFU
+#define COLOR_DGRAY   0x2104U
+#define COLOR_ORANGE  0xFD20U
+#define COLOR_GREEN   0x07E0U
+#define COLOR_YELLOW  0xFFE0U
+#define COLOR_RED     0xF800U
 
 #define R15  ((int16_t)((float)BUBBLE_TRAVEL * 15.0f / BUBBLE_MAX_DEG))
 #define R30  ((int16_t)((float)BUBBLE_TRAVEL * 30.0f / BUBBLE_MAX_DEG))
 #define R45  ((int16_t)BUBBLE_TRAVEL)
 
 static const int16_t s_ring_r[3] = {R15, R30, R45};
-
-static void fill_circle(int16_t cx, int16_t cy, int16_t r, uint32_t color) {
-    for (int16_t y = cy - r; y <= cy + r; y++) {
-        if (y < 0 || y >= HEIGHT) continue;
-        float dy = (float)(y - cy);
-        int16_t dx = (int16_t)sqrtf((float)(r * r) - dy * dy);
-        int16_t x0 = cx - dx, x1 = cx + dx;
-        if (x0 < 0) x0 = 0;
-        if (x1 >= WIDTH) x1 = WIDTH - 1;
-        if (x0 > x1) continue;
-        if (x0 < x1) {
-            int16_t yt = y, yb = (y + 1 < HEIGHT) ? y + 1 : y - 1;
-            if (yt > yb) { int16_t t = yt; yt = yb; yb = t; }
-            st7789_fill_rect(&g_st7789, (uint16_t)x0, (uint16_t)(yt + Y_OFF),
-                             (uint16_t)x1, (uint16_t)(yb + Y_OFF), color);
-        } else {
-            st7789_draw_point(&g_st7789, (uint16_t)x0, (uint16_t)(y + Y_OFF), color);
-        }
-    }
-}
-
-static void draw_hline(int16_t x0, int16_t x1, int16_t y, uint32_t color) {
-    if (x0 > x1) { int16_t t = x0; x0 = x1; x1 = t; }
-    if (x0 < 0) x0 = 0;
-    if (x1 >= WIDTH) x1 = WIDTH - 1;
-    int16_t y1 = (y + 1 < HEIGHT) ? y + 1 : y - 1;
-    if (x0 >= x1 || y < 0 || y1 < 0 || y >= HEIGHT) return;
-    if (y > y1) { int16_t t = y; y = y1; y1 = t; }
-    st7789_fill_rect(&g_st7789, x0, y + Y_OFF, x1, y1 + Y_OFF, color);
-}
-
-static void draw_vline(int16_t x, int16_t y0, int16_t y1, uint32_t color) {
-    if (y0 > y1) { int16_t t = y0; y0 = y1; y1 = t; }
-    if (y0 < 0) y0 = 0;
-    if (y1 >= HEIGHT) y1 = HEIGHT - 1;
-    int16_t x1 = (x + 1 < WIDTH) ? x + 1 : x - 1;
-    if (y0 >= y1 || x < 0 || x1 < 0 || x >= WIDTH) return;
-    if (x > x1) { int16_t t = x; x = x1; x1 = t; }
-    st7789_fill_rect(&g_st7789, x, y0 + Y_OFF, x1, y1 + Y_OFF, color);
-}
-
-static void ring_px(int16_t x, int16_t y, uint32_t color) {
-    if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT)
-        st7789_draw_point(&g_st7789, (uint16_t)x, (uint16_t)(y + Y_OFF), color);
-}
-
-static void draw_ring(int16_t cx, int16_t cy, int16_t r, uint32_t color) {
-    int16_t x = 0, y = r, d = 3 - 2 * r;
-    while (y >= x) {
-        ring_px(cx+x, cy+y, color); ring_px(cx-x, cy+y, color);
-        ring_px(cx+x, cy-y, color); ring_px(cx-x, cy-y, color);
-        ring_px(cx+y, cy+x, color); ring_px(cx-y, cy+x, color);
-        ring_px(cx+y, cy-x, color); ring_px(cx-y, cy-x, color);
-        if (d < 0) d += 4 * x + 6;
-        else { d += 4 * (x - y) + 10; y--; }
-        x++;
-    }
-}
-
-static void restore_ring_arc(int16_t ox, int16_t oy, int16_t r,
-                              int16_t px, int16_t py, int16_t clip_r) {
-    int32_t cr2 = (int32_t)(clip_r + 1) * (clip_r + 1);
-    int16_t x = 0, y = r, d = 3 - 2 * r;
-
-#define ARC_PT(ax, ay) do { \
-        int32_t _dx = (int32_t)(ax) - px, _dy = (int32_t)(ay) - py; \
-        if (_dx*_dx + _dy*_dy <= cr2) ring_px((ax), (ay), COLOR_WHITE); \
-    } while (0)
-
-    while (y >= x) {
-        ARC_PT(ox+x, oy+y); ARC_PT(ox-x, oy+y);
-        ARC_PT(ox+x, oy-y); ARC_PT(ox-x, oy-y);
-        ARC_PT(ox+y, oy+x); ARC_PT(ox-y, oy+x);
-        ARC_PT(ox+y, oy-x); ARC_PT(ox-y, oy-x);
-        if (d < 0) d += 4 * x + 6;
-        else { d += 4 * (x - y) + 10; y--; }
-        x++;
-    }
-#undef ARC_PT
-}
-
-static void draw_cross(int16_t cx, int16_t cy, uint32_t color) {
-    draw_hline(0, WIDTH - 1, cy, color);
-    draw_vline(cx, 0, HEIGHT - 1, color);
-    for (int ri = 0; ri < 3; ri++)
-        draw_ring(cx, cy, s_ring_r[ri], COLOR_WHITE);
-}
+static uint16_t s_prev_color = COLOR_GREEN;
 
 static void draw_battery(uint8_t pct) {
     const int16_t bx = WIDTH - 30, by = 4;
-    st7789_fill_rect(&g_st7789, bx - 2, Y_OFF, WIDTH - 1, 18 + Y_OFF, COLOR_BLACK);
-    draw_hline(bx, bx + 24, by,      COLOR_WHITE);
-    draw_hline(bx, bx + 24, by + 12, COLOR_WHITE);
-    draw_vline(bx,      by, by + 12, COLOR_WHITE);
-    draw_vline(bx + 24, by, by + 12, COLOR_WHITE);
-    st7789_fill_rect(&g_st7789, bx + 25, by + 4 + Y_OFF, bx + 27, by + 9 + Y_OFF, COLOR_WHITE);
+    fb_hline(bx, bx + 24, by,      COLOR_WHITE);
+    fb_hline(bx, bx + 24, by + 12, COLOR_WHITE);
+    fb_vline(bx,      by, by + 12, COLOR_WHITE);
+    fb_vline(bx + 24, by, by + 12, COLOR_WHITE);
+    fb_fill_rect(bx + 25, by + 4, bx + 27, by + 9, COLOR_WHITE);
     int16_t fw = (int16_t)(22 * pct / 100);
     if (fw > 1)
-        st7789_fill_rect(&g_st7789, bx + 1, by + 1 + Y_OFF, bx + fw, by + 11 + Y_OFF, COLOR_WHITE);
+        fb_fill_rect(bx + 1, by + 1, bx + fw, by + 11, COLOR_WHITE);
 }
 
-static void draw_armed(void) {
-    st7789_fill_rect(&g_st7789, WIDTH - 76, HEIGHT - 30 + Y_OFF, WIDTH - 1, HEIGHT - 1 + Y_OFF, COLOR_YELLOW);
-    st7789_write_string(&g_st7789, WIDTH - 58, HEIGHT - 23 + Y_OFF, "ARMED", 5, COLOR_BLACK, ST7789_FONT_16);
+static void draw_popup(float popup_pitch, float popup_roll) {
+    const int16_t bx1 = 40, bx2 = 199, by1 = 70, by2 = 165;
+    const int16_t cx = (bx1 + bx2) / 2;
+
+    fb_fill_rect(bx1, by1, bx2, by2, COLOR_WHITE);
+    fb_fill_rect(bx1 + 2, by1 + 2, bx2 - 2, by2 - 2, COLOR_BLACK);
+
+    fb_string(cx - (13 * 6) / 2, by1 + 4, "LAUNCH ANGLES", COLOR_WHITE, 12);
+    fb_fill_rect(bx1 + 2, by1 + 18, bx2 - 2, by1 + 19, COLOR_DGRAY);
+
+    char pbuf[8], rbuf[8];
+    int pi = (int)roundf(popup_pitch);
+    int ri = (int)roundf(popup_roll);
+    snprintf(pbuf, sizeof(pbuf), "%c%d", pi >= 0 ? '^' : 'v', abs(pi));
+    snprintf(rbuf, sizeof(rbuf), "%c%d", ri >= 0 ? '>' : '<', abs(ri));
+    int16_t plen = (int16_t)strlen(pbuf);
+    int16_t rlen = (int16_t)strlen(rbuf);
+    fb_string(cx - (plen * 12) / 2, by1 + 24, pbuf, COLOR_WHITE, 24);
+    fb_string(cx - (rlen * 12) / 2, by1 + 52, rbuf, COLOR_WHITE, 24);
 }
 
 void screen_init(void) {
-    st7789_fill_rect(&g_st7789, 0, Y_OFF, WIDTH - 1, HEIGHT - 1 + Y_OFF, COLOR_BLACK);
-    const int16_t cx = WIDTH / 2, cy = HEIGHT / 2;
-    draw_cross(cx, cy, COLOR_DGRAY);
+    fb_clear(COLOR_BLACK);
+    fb_flush();
 }
 
-static bool s_popup_force_redraw = false;
+void screen_render(float roll, float pitch, uint8_t bat, bool locked,
+                   bool popup, float popup_pitch, float popup_roll) {
+    fb_clear(COLOR_BLACK);
 
-void draw_bubble(float roll, float pitch, uint8_t bat, bool pressed) {
-    static int16_t  prev_x       = WIDTH  / 2;
-    static int16_t  prev_y       = HEIGHT / 2;
-    static uint32_t prev_color   = COLOR_GREEN;
-    static uint8_t  prev_bat     = 255;
-    static bool     prev_pressed = false;
-    static char     prev_rbuf[8] = "";
-    static char     prev_pbuf[8] = "";
+    const int16_t cx = WIDTH / 2, cy = HEIGHT / 2;
+    uint16_t cross_color = locked ? COLOR_ORANGE : COLOR_DGRAY;
 
-    const int16_t cx = WIDTH  / 2;
-    const int16_t cy = HEIGHT / 2;
-    const int16_t er = BUBBLE_DOT_R + 1;
+    // Crosshair
+    fb_hline(0, WIDTH - 1, cy, cross_color);
+    fb_vline(cx, 0, HEIGHT - 1, cross_color);
 
-    uint32_t cross_color = pressed ? COLOR_ORANGE : COLOR_DGRAY;
+    // Reference rings
+    for (int i = 0; i < 3; i++)
+        fb_draw_circle(cx, cy, s_ring_r[i], COLOR_WHITE);
 
-    float scale  = (float)BUBBLE_TRAVEL / BUBBLE_MAX_DEG;
+    // Bubble position
+    float scale = (float)BUBBLE_TRAVEL / BUBBLE_MAX_DEG;
     float fdx = -pitch * scale, fdy = -roll * scale;
     float dist = sqrtf(fdx * fdx + fdy * fdy);
-    float max_r = (float)BUBBLE_TRAVEL;
-    if (dist > max_r) { float s = max_r / dist; fdx *= s; fdy *= s; }
+    if (dist > (float)BUBBLE_TRAVEL) { float s = (float)BUBBLE_TRAVEL / dist; fdx *= s; fdy *= s; }
     int16_t dot_x = cx + (int16_t)fdx;
     int16_t dot_y = cy + (int16_t)fdy;
 
+    // Bubble colour with hysteresis
     float tilt = sqrtf(roll * roll + pitch * pitch);
-    float lo = (prev_color == COLOR_GREEN) ? 5.5f : 4.5f;
-    float hi = (prev_color == COLOR_RED)   ? 14.5f : 15.5f;
-    uint32_t dot_color = tilt < lo ? COLOR_GREEN : tilt < hi ? COLOR_YELLOW : COLOR_RED;
+    float lo = (s_prev_color == COLOR_GREEN) ? 5.5f : 4.5f;
+    float hi = (s_prev_color == COLOR_RED)   ? 14.5f : 15.5f;
+    uint16_t dot_color = tilt < lo ? COLOR_GREEN : tilt < hi ? COLOR_YELLOW : COLOR_RED;
+    s_prev_color = dot_color;
 
-    if (pressed != prev_pressed) {
-        draw_cross(cx, cy, cross_color);
-        fill_circle(prev_x, prev_y, BUBBLE_DOT_R, prev_color);
-        if (pressed)
-            draw_armed();
-        else
-            st7789_fill_rect(&g_st7789, WIDTH - 76, HEIGHT - 30 + Y_OFF, WIDTH - 1, HEIGHT - 1 + Y_OFF, COLOR_BLACK);
-        prev_pressed = pressed;
-    }
+    fb_fill_circle(dot_x, dot_y, BUBBLE_DOT_R, dot_color);
 
-    if (s_popup_force_redraw) {
-        fill_circle(prev_x, prev_y, BUBBLE_DOT_R, prev_color);
-        prev_bat = 255;
-        prev_rbuf[0] = '\0';
-        prev_pbuf[0] = '\0';
-        s_popup_force_redraw = false;
-    }
-
-    bool moved   = (dot_x != prev_x || dot_y != prev_y);
-    bool recolor = (dot_color != prev_color);
-
-    bool will_erase   = (moved || recolor);
-    bool bat_erased   = will_erase && (prev_x + er >= WIDTH - 32  && prev_y - er <= 18);
-    bool r_lbl_erased = will_erase && (prev_x - er < 73           && prev_y - er < 31);
-    bool p_lbl_erased = will_erase && (prev_x - er < 61           && prev_y + er > HEIGHT - 66);
-    bool armed_erased = will_erase && pressed && (prev_x + er > WIDTH - 78 && prev_y + er > HEIGHT - 32);
-
-    if (moved || recolor) {
-        fill_circle(prev_x, prev_y, er, COLOR_BLACK);
-        fill_circle(dot_x, dot_y, BUBBLE_DOT_R, dot_color);
-
-        draw_hline(prev_x - er, prev_x + er, cy, cross_color);
-        draw_vline(cx, prev_y - er, prev_y + er, cross_color);
-
-        for (int ri = 0; ri < 3; ri++) {
-            int32_t dx = prev_x - cx, dy = prev_y - cy;
-            float d = sqrtf((float)(dx * dx + dy * dy));
-            if (fabsf(d - (float)s_ring_r[ri]) <= (float)(er + 3))
-                restore_ring_arc(cx, cy, s_ring_r[ri], prev_x, prev_y, er + 2);
-        }
-
-        int32_t sep_x = dot_x - prev_x, sep_y = dot_y - prev_y;
-        int32_t sum_r  = er + BUBBLE_DOT_R + 2;
-        if (sep_x * sep_x + sep_y * sep_y < sum_r * sum_r)
-            fill_circle(dot_x, dot_y, BUBBLE_DOT_R, dot_color);
-
-        prev_x = dot_x;
-        prev_y = dot_y;
-        prev_color = dot_color;
-    }
-
-    // Roll label — top-left: < R±NN >
+    // Roll label — top-left
     char rbuf[8], pbuf[8];
     int r = (int)roundf(pitch), p = (int)roundf(roll);
     snprintf(rbuf, sizeof(rbuf), "R%c%d", r >= 0 ? '+' : '-', abs(r));
     snprintf(pbuf, sizeof(pbuf), "P%c%d", p >= 0 ? '+' : '-', abs(p));
+    fb_string(2,  8,          "<",  COLOR_WHITE, 16);
+    fb_string(12, 4,          rbuf, COLOR_WHITE, 24);
+    fb_string(62, 8,          ">",  COLOR_WHITE, 16);
 
-    if (strcmp(rbuf, prev_rbuf) != 0 || r_lbl_erased) {
-        st7789_fill_rect(&g_st7789, 0, Y_OFF, 71, 29 + Y_OFF, COLOR_BLACK);
-        st7789_write_string(&g_st7789, 2,  8  + Y_OFF, "<",  1,           COLOR_WHITE, ST7789_FONT_16);
-        st7789_write_string(&g_st7789, 12, 4  + Y_OFF, rbuf, strlen(rbuf), COLOR_WHITE, ST7789_FONT_24);
-        st7789_write_string(&g_st7789, 62, 8  + Y_OFF, ">",  1,           COLOR_WHITE, ST7789_FONT_16);
-        memcpy(prev_rbuf, rbuf, sizeof(rbuf));
+    // Pitch label — bottom-left
+    fb_string(24, HEIGHT - 62, "^",  COLOR_WHITE, 16);
+    fb_string(4,  HEIGHT - 44, pbuf, COLOR_WHITE, 24);
+    fb_string(24, HEIGHT - 18, "v",  COLOR_WHITE, 16);
+
+    // Battery
+    draw_battery(bat);
+
+    // Armed overlay
+    if (locked) {
+        fb_fill_rect(WIDTH - 76, HEIGHT - 30, WIDTH - 1, HEIGHT - 1, COLOR_YELLOW);
+        fb_string(WIDTH - 58, HEIGHT - 23, "ARMED", COLOR_BLACK, 16);
     }
 
-    // Pitch label — bottom-left: ^ / P±NN / v
-    if (strcmp(pbuf, prev_pbuf) != 0 || p_lbl_erased) {
-        st7789_fill_rect(&g_st7789, 0, HEIGHT - 64 + Y_OFF, 59, HEIGHT - 1 + Y_OFF, COLOR_BLACK);
-        st7789_write_string(&g_st7789, 24, HEIGHT - 62 + Y_OFF, "^",  1,           COLOR_WHITE, ST7789_FONT_16);
-        st7789_write_string(&g_st7789, 4,  HEIGHT - 44 + Y_OFF, pbuf, strlen(pbuf), COLOR_WHITE, ST7789_FONT_24);
-        st7789_write_string(&g_st7789, 24, HEIGHT - 18 + Y_OFF, "v",  1,           COLOR_WHITE, ST7789_FONT_16);
-        memcpy(prev_pbuf, pbuf, sizeof(pbuf));
-    }
+    // Launch popup
+    if (popup) draw_popup(popup_pitch, popup_roll);
 
-    if (bat != prev_bat || bat_erased) {
-        draw_battery(bat);
-        prev_bat = bat;
-    }
-
-    if (armed_erased)
-        draw_armed();
-}
-
-void draw_launch_popup(float pitch, float roll) {
-    const int16_t bx1 = 40, bx2 = 199, by1 = 70, by2 = 165;
-    const int16_t cx = (bx1 + bx2) / 2;
-
-    st7789_fill_rect(&g_st7789, bx1, by1 + Y_OFF, bx2, by2 + Y_OFF, COLOR_WHITE);
-    st7789_fill_rect(&g_st7789, bx1 + 2, by1 + 2 + Y_OFF, bx2 - 2, by2 - 2 + Y_OFF, COLOR_BLACK);
-
-    char title[] = "LAUNCH ANGLES";
-    st7789_write_string(&g_st7789, cx - (13 * 6) / 2, by1 + 4 + Y_OFF,
-                        title, 13, COLOR_WHITE, ST7789_FONT_12);
-
-    st7789_fill_rect(&g_st7789, bx1 + 2, by1 + 18 + Y_OFF, bx2 - 2, by1 + 19 + Y_OFF, COLOR_DGRAY);
-
-    char pbuf[8];
-    int pi = (int)roundf(pitch);
-    snprintf(pbuf, sizeof(pbuf), "%c%d", pi >= 0 ? '^' : 'v', abs(pi));
-    int16_t plen = (int16_t)strlen(pbuf);
-    st7789_write_string(&g_st7789, cx - (plen * 12) / 2, by1 + 24 + Y_OFF,
-                        pbuf, plen, COLOR_WHITE, ST7789_FONT_24);
-
-    char rbuf[8];
-    int ri = (int)roundf(roll);
-    snprintf(rbuf, sizeof(rbuf), "%c%d", ri >= 0 ? '>' : '<', abs(ri));
-    int16_t rlen = (int16_t)strlen(rbuf);
-    st7789_write_string(&g_st7789, cx - (rlen * 12) / 2, by1 + 52 + Y_OFF,
-                        rbuf, rlen, COLOR_WHITE, ST7789_FONT_24);
-}
-
-void clear_launch_popup(bool pressed) {
-    const int16_t bx1 = 40, bx2 = 199, by1 = 70, by2 = 165;
-    const int16_t cx = WIDTH / 2, cy = HEIGHT / 2;
-    uint32_t cross_color = pressed ? COLOR_ORANGE : COLOR_DGRAY;
-
-    st7789_fill_rect(&g_st7789, bx1, by1 + Y_OFF, bx2, by2 + Y_OFF, COLOR_BLACK);
-    draw_hline(bx1, bx2, cy, cross_color);
-    draw_vline(cx, by1, by2, cross_color);
-    for (int ri = 0; ri < 3; ri++)
-        draw_ring(cx, cy, s_ring_r[ri], COLOR_WHITE);
-    s_popup_force_redraw = true;
+    fb_flush();
 }

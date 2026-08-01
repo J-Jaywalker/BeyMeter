@@ -1,8 +1,8 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 #include "hw.h"
 
 void screen_init(void);
-void draw_bubble(float roll, float pitch, uint8_t bat, bool pressed);
-void draw_launch_popup(float pitch, float roll);
-void clear_launch_popup(bool pressed);
+void screen_render(float roll, float pitch, uint8_t bat, bool locked,
+                   bool popup, float popup_pitch, float popup_roll);
