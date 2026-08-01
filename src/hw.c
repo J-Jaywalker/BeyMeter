@@ -42,9 +42,17 @@ uint8_t bat_percent(void) {
 
 void hw_init(void) {
     // NeoPixel power off
+    gpio_init(16);
+    gpio_set_dir(16, GPIO_OUT);
+    gpio_put(16, 0);
     gpio_init(17);
     gpio_set_dir(17, GPIO_OUT);
-    gpio_put(17, 0);
+    gpio_put(17, 1);
+
+    // D2F lock button — active-low, internal pull-up
+    gpio_init(BTN_LOCK);
+    gpio_set_dir(BTN_LOCK, GPIO_IN);
+    gpio_pull_up(BTN_LOCK);
 
     // I2C for IMU and battery gauge
     i2c_init(I2C_PORT, 400000);

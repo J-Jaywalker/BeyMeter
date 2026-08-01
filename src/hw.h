@@ -19,6 +19,7 @@
 #define SPI_MOSI    19
 #define DISPLAY_CS  9    // D9
 #define DISPLAY_DC  10   // D10
+#define BTN_LOCK    11   // D11 — D2F NO, active-low
 #define SPI_BAUD    62500000
 
 #define WIDTH   240
