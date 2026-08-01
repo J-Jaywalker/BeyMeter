@@ -27,7 +27,8 @@ target_include_directories(BeyMeter PRIVATE
     lib/ism330dhcx-pid
 )
 
-target_link_libraries(BeyMeter pico_stdlib hardware_i2c hardware_spi hardware_dma pico_float m)
+target_link_libraries(BeyMeter pico_stdlib hardware_i2c hardware_spi hardware_dma
+    hardware_clocks hardware_pll hardware_xosc pico_float m)
 
 pico_add_extra_outputs(BeyMeter)
 

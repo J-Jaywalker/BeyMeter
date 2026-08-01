@@ -2,6 +2,12 @@
 #include <stdbool.h>
 #include "hw.h"
 #include "driver_st7789_interface.h"
+#include "hardware/clocks.h"
+#include "hardware/pll.h"
+#include "hardware/xosc.h"
+#include "hardware/structs/clocks.h"
+#include "hardware/regs/io_bank0.h"
+#include "pico/runtime_init.h"   // runtime_init_clocks() — restores the PLLs
 
 st7789_handle_t g_st7789;
 
@@ -34,6 +40,27 @@ static uint16_t bat_read_reg(uint8_t reg) {
     return (uint16_t)(buf[0] << 8) | buf[1];
 }
 
+static void bat_write_reg(uint8_t reg, uint16_t val) {
+    uint8_t buf[3] = { reg, (uint8_t)(val >> 8), (uint8_t)val };
+    i2c_write_blocking(I2C_PORT, BAT_ADDR, buf, 3, false);
+}
+
+// MAX17048 CONFIG (0x0C): POR default 0x971C, bit 7 of the low byte = SLEEP.
+// SLEEP only takes effect once EnSleep (bit 13 of MODE, 0x06) has been set.
+// Writing the default back on wake avoids a read-modify-write on a gauge that
+// might not be fitted.
+#define BAT_CONFIG_DEFAULT 0x971CU
+#define BAT_CONFIG_SLEEP   0x0080U
+
+void hw_bat_sleep(void) {
+    bat_write_reg(0x06, 0x2000);                                  // MODE: EnSleep
+    bat_write_reg(0x0C, BAT_CONFIG_DEFAULT | BAT_CONFIG_SLEEP);
+}
+
+void hw_bat_wake(void) {
+    bat_write_reg(0x0C, BAT_CONFIG_DEFAULT);
+}
+
 uint8_t bat_percent(void) {
     uint8_t pct = bat_read_reg(0x04) >> 8;
     return pct > 100 ? 100 : pct;
@@ -54,6 +81,13 @@ void hw_init(void) {
     gpio_init(BTN_LOCK);
     gpio_set_dir(BTN_LOCK, GPIO_IN);
     gpio_pull_up(BTN_LOCK);
+
+    // Backlight — no-op until LITE is wired and BL_PIN defined (see hw.h)
+#ifdef BL_PIN
+    gpio_init(BL_PIN);
+    gpio_set_dir(BL_PIN, GPIO_OUT);
+#endif
+    hw_backlight(true);
 
     // I2C for IMU and battery gauge
     i2c_init(I2C_PORT, 400000);
@@ -105,6 +139,61 @@ void hw_init(void) {
     st7789_normal_display_mode_on(&g_st7789);
     st7789_display_on(&g_st7789);
     sleep_ms(10);
+
+    // Clear the gauge's sleep bit in case we got here from a wake
+    hw_bat_wake();
+}
+
+/* ── Sleep / wake ────────────────────────────────────────────────── */
+
+void hw_backlight(bool on) {
+#ifdef BL_PIN
+    gpio_put(BL_PIN, on ? 1 : 0);
+#else
+    (void)on;   // LITE unwired — the backlight cannot be switched from here
+#endif
+}
+
+void hw_display_sleep(void) {
+    st7789_display_off(&g_st7789);   // blank every pixel
+    st7789_sleep_in(&g_st7789);      // stop the panel booster and oscillator
+    sleep_ms(5);
+}
+
+void hw_imu_sleep(stmdev_ctx_t *imu) {
+    ism330dhcx_xl_data_rate_set(imu, ISM330DHCX_XL_ODR_OFF);
+}
+
+// Parks the chip in DORMANT — every clock stopped, including the crystal — and
+// returns once BTN_LOCK is pulled low. Nothing runs in between.
+void hw_dormant_until_button(void) {
+    const uint32_t src_hz = XOSC_KHZ * 1000;
+    const uint32_t wake_ev = IO_BANK0_DORMANT_WAKE_INTE0_GPIO0_EDGE_LOW_BITS;
+
+    // We wake on a falling edge, so never go under with the button already
+    // down — that edge would never arrive and the meter would hang
+    while (!gpio_get(BTN_LOCK))
+        tight_loop_contents();
+
+    // DORMANT halts the crystal, so nothing may still be running off a PLL
+    clock_configure(clk_ref, CLOCKS_CLK_REF_CTRL_SRC_VALUE_XOSC_CLKSRC, 0,
+                    src_hz, src_hz);
+    clock_configure(clk_sys, CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLK_REF, 0,
+                    src_hz, src_hz);
+    clock_configure(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS,
+                    src_hz, src_hz);
+    clock_stop(clk_usb);
+    clock_stop(clk_adc);
+    clock_stop(clk_rtc);
+    pll_deinit(pll_sys);
+    pll_deinit(pll_usb);
+
+    gpio_set_dormant_irq_enabled(BTN_LOCK, wake_ev, true);
+    xosc_dormant();                  // ← stops here until the button is pressed
+    gpio_acknowledge_irq(BTN_LOCK, wake_ev);
+    gpio_set_dormant_irq_enabled(BTN_LOCK, wake_ev, false);
+
+    runtime_init_clocks();           // PLLs back up, full speed
 }
 
 /* ── Hardware presence checks ────────────────────────────────────── */
